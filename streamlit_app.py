@@ -6,141 +6,15 @@ Pulls real market data, runs scenario analysis, and gives a clear verdict.
 """
 
 import streamlit as st
-import requests
-import re
-import io
-import csv
-import time
 import numpy as np
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field
-from typing import Optional
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, numbers, Border, Side
 
-# ── Gemini AI (optional, uses REST API — no extra package needed) ──
-GEMINI_AVAILABLE = True  # Always available since we use REST API
-
-
-def _get_gemini_key():
-    try:
-        return st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        return ""
-
-
-def generate_ai_summary(deal_data: dict) -> str:
-    """Generate a plain-English AI deal analysis using Google Gemini REST API (no SDK needed)."""
-    api_key = _get_gemini_key()
-    if not api_key:
-        return ""
-
-    prompt = f"""You are a real estate investment analyst. Analyze this deal and give a clear, 
-plain-English summary that a beginner investor (first-time flipper) can understand. Be specific with numbers.
-
-You MUST answer ALL of these questions clearly with specific numbers:
-
-## 1. SHOULD I BUY THIS DEAL?
-Give a clear YES or NO with reasoning. Consider the profit margin, exit price vs comps, and risks.
-
-## 2. FLIP OR HOLD — WHICH STRATEGY IS BETTER?
-- **Flip (sell immediately after build):** What's the projected profit? Is the exit price realistic?
-- **Hold & Rent:** What monthly rent should I charge? How long should I hold before selling? What's the cash flow?
-- **Recommend one strategy** and explain why.
-
-## 3. WHAT PRICE SHOULD I TARGET FOR RENTING?
-- Based on Census median rents and the property size, suggest a specific monthly rent per unit.
-- Census median rent for ZIP {deal_data.get('zip_code', 'N/A')}: {deal_data.get('census_median_rent', 'N/A')}/mo
-- Census rent by bedrooms: {deal_data.get('census_rent_by_br', 'N/A')}
-- How long to hold if renting? Give a specific timeframe (e.g., 2 years, 5 years).
-
-## 4. WHAT SHOULD MY MAXIMUM PURCHASE PRICE BE?
-- Based on the comps and desired profit margin (20%+), what is the max I should pay for this land/property?
-- Show the math: Max Purchase = Exit Revenue - Build Costs - Desired Profit
-
-## 5. WHAT EXIT PRICE PER SQUARE FOOT IS REALISTIC?
-- Based on nearby sold comps, what $/sf should I realistically expect?
-- Is the current exit assumption of {deal_data.get('exit_psf', 0)}/sf achievable?
-
-CRITICAL CONTEXT: This is a fix-and-flip deal. Negative monthly rental cash flow is normal for flips — rentals are a backup plan, not the primary strategy. Focus on flip profit first.
-
-IMPORTANT FORMATTING RULES: Do NOT use dollar signs ($) for currency. Instead write amounts like "450,000" or "575/sf". Do NOT use LaTeX or math notation. Use plain text only.
-
-DEAL DATA:
-- Address: {deal_data.get('address', 'N/A')}, ZIP: {deal_data.get('zip_code', 'N/A')}
-- Purchase Price: ${deal_data.get('purchase_price', 0):,.0f}
-- Total Build Size: {deal_data.get('total_sf', 0):,} sq ft ({deal_data.get('num_units', 1)} units, {deal_data.get('per_unit_sf', 0):,.0f} sf/unit)
-- Exit Price/SF: ${deal_data.get('exit_psf', 0)}/sf
-- Total All-In Cost: ${deal_data.get('total_cost', 0):,.0f}
-- Expected Revenue: ${deal_data.get('revenue', 0):,.0f}
-- Projected Profit: ${deal_data.get('profit', 0):,.0f}
-- Profit Margin: {deal_data.get('margin_pct', 0):.1f}%
-- Break-Even PSF: ${deal_data.get('breakeven_psf', 0):.0f}/sf
-- Market Median PSF: ${deal_data.get('median_psf', 0)}/sf (from {deal_data.get('comp_count', 0)} comps)
-- Risk Score: {deal_data.get('risk_score', 0)}/100
-- Verdict: {deal_data.get('verdict', 'N/A')}
-- Listing Status: {deal_data.get('listing_status', 'Unknown')}
-- Zoning: {deal_data.get('zoning', 'N/A')}
-- Monthly Rent: ${deal_data.get('monthly_rent', 0):,.0f}
-- Rental NOI/Year: ${deal_data.get('rental_noi', 0):,.0f}
-
-COMPARABLE SALES (nearby sold properties):
-{deal_data.get('top_comps', 'No comp data')}
-
-CONSTRUCTION ACTIVITY:
-- Active permits on street: {deal_data.get('active_permits', 0)}
-- Completed projects: {deal_data.get('completed_permits', 0)}
-- Notable builders: {deal_data.get('permit_builders', 'N/A')}
-
-HOLD/RENTAL ANALYSIS ({deal_data.get('hold_months', 0)} month hold):
-- Monthly NOI: ${deal_data.get('monthly_noi', 0):,.0f}
-- Monthly Cash Flow After Debt: ${deal_data.get('monthly_cf_after_debt', 0):,.0f}
-- Equity Multiple: {deal_data.get('equity_multiple', 0):.2f}x
-- Annualized Return: {deal_data.get('annualized_return', 0):.1f}%
-- Cash-on-Cash Yield: {deal_data.get('cash_yield', 0):.1f}%
-
-FINANCING:
-- Loan Amount: ${deal_data.get('loan_amount', 0):,.0f}
-- Construction Interest: ${deal_data.get('construction_interest', 0):,.0f}
-- Build Cost: ${deal_data.get('build_cost_psf', 0)}/sf
-- Build Timeline: {deal_data.get('build_months', 0)} months
-
-Keep your response under 800 words. Use headers (##) for each section. Use bullet points for clarity.
-End with a FINAL VERDICT: BUY or DON'T BUY, and your recommended strategy (Flip or Hold).
-The app's automated verdict is: {deal_data.get('verdict', 'N/A')}. Your recommendation should be consistent with this."""
-
-    models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
-    last_error = ""
-    try:
-        for model_name in models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            try:
-                resp = requests.post(url, json={
-                    "contents": [{"parts": [{"text": prompt}]}]
-                }, timeout=30)
-            except Exception:
-                continue
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            elif resp.status_code in (429, 404, 503):
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                time.sleep(1)
-                continue  # try next model
-            else:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                continue  # try next model too
-        # All models failed
-        if "429" in last_error:
-            return ("⚠️ **Gemini API quota exceeded.** The free tier has a daily limit.\n\n"
-                    "**Options:**\n"
-                    "- Wait until tomorrow (quota resets daily)\n"
-                    "- Create a new API key at [Google AI Studio](https://aistudio.google.com/apikey) "
-                    "and update it in Streamlit Cloud → Settings → Secrets")
-        return f"⚠️ AI analysis error — all models failed. Last error: {last_error}"
-    except Exception as e:
-        return f"⚠️ AI analysis unavailable: {str(e)}"
-
+from models import Permit, AnalysisResult
+from fetchers import AustinPermits, RedfinComps, fetch_census_home_value, fetch_census_rents, geocode_address, fetch_plot_info, ZONING_INFO, OVERLAY_EXPLANATIONS
+from analysis import run_analysis, extract_street_name
+from financials import _compute_hold_profit, generate_excel_bytes
+from ai_summary import generate_ai_summary, GEMINI_AVAILABLE
+from report import generate_report_bytes
 
 # ── Page Config ──
 st.set_page_config(
@@ -149,1636 +23,61 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Data Classes ──
-
-@dataclass
-class Permit:
-    address: str = ""
-    description: str = ""
-    sqft: float = 0
-    issue_date: str = ""
-    permit_class: str = ""
-    work_class: str = ""
-    builder: str = ""
-    contractor_name: str = ""
-    applicant_name: str = ""
-    applicant_org: str = ""
-    housing_units: int = 0
-    floors: int = 0
-    status: str = ""
-    permit_number: str = ""
-    permit_type: str = ""
-    permit_type_desc: str = ""
-
-@dataclass
-class AnalysisResult:
-    street_permits: list = field(default_factory=list)
-    street_all_permits: list = field(default_factory=list)
-    zip_permits: list = field(default_factory=list)
-    redfin_comps: list = field(default_factory=list)
-    neighborhood_comps: list = field(default_factory=list)
-    active_comps: list = field(default_factory=list)
-    rental_comps: list = field(default_factory=list)
-    rental_stats: dict = field(default_factory=dict)
-    market_stats: dict = field(default_factory=dict)
-    neighborhood_stats: dict = field(default_factory=dict)
-    active_stats: dict = field(default_factory=dict)
-    sources_status: dict = field(default_factory=dict)
-    listing_status: dict = field(default_factory=dict)
-
-
-# ── Austin Permits Module ──
-
-class AustinPermits:
-    BASE_URL = "https://data.austintexas.gov/resource/3syk-w9eu.json"
-
-    def search_street(self, street_name: str, zip_code: str) -> list[Permit]:
-        two_years_ago = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%dT00:00:00')
-        where = f"permit_location like '%{street_name.upper()}%' AND permittype='BP' AND work_class='New' AND original_zip='{zip_code}' AND issue_date >= '{two_years_ago}'"
-        params = {"$where": where, "$order": "issue_date DESC", "$limit": 100}
-        for attempt in range(2):
-            try:
-                resp = requests.get(self.BASE_URL, params=params, timeout=20)
-                if resp.status_code != 200:
-                    continue
-                return self._parse_permits(resp.json())
-            except Exception:
-                continue
-        return []
-
-    def search_street_all_types(self, street_name: str, zip_code: str) -> list[Permit]:
-        """Search all permit types (building, electrical, plumbing, mechanical) for a street."""
-        two_years_ago = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%dT00:00:00')
-        where = f"permit_location like '%{street_name.upper()}%' AND original_zip='{zip_code}' AND issue_date >= '{two_years_ago}'"
-        params = {"$where": where, "$order": "issue_date DESC", "$limit": 200}
-        for attempt in range(2):
-            try:
-                resp = requests.get(self.BASE_URL, params=params, timeout=20)
-                if resp.status_code != 200:
-                    continue
-                return self._parse_permits(resp.json())
-            except Exception:
-                continue
-        return []
-
-    def search_zip(self, zip_code: str, limit: int = 200) -> list[Permit]:
-        two_years_ago = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%dT00:00:00')
-        where = f"original_zip='{zip_code}' AND permittype='BP' AND work_class='New' AND issue_date >= '{two_years_ago}'"
-        params = {"$where": where, "$order": "issue_date DESC", "$limit": limit}
-        for attempt in range(2):
-            try:
-                resp = requests.get(self.BASE_URL, params=params, timeout=20)
-                if resp.status_code != 200:
-                    continue
-                permits = self._parse_permits(resp.json())
-                return [p for p in permits if 'Single Family' in p.permit_class
-                        or 'Two Family' in p.permit_class
-                        or 'Secondary' in p.permit_class]
-            except Exception:
-                continue
-        return []
-
-    def _parse_permits(self, data: list) -> list[Permit]:
-        permits = []
-        for r in data:
-            issue_date = ""
-            if r.get("issue_date"):
-                try:
-                    dt = datetime.fromisoformat(r["issue_date"].replace("T", " ").split(".")[0])
-                    issue_date = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    issue_date = str(r["issue_date"])[:10]
-            permits.append(Permit(
-                address=r.get("permit_location", ""),
-                description=r.get("description", ""),
-                sqft=float(r.get("total_new_add_sqft", 0) or 0),
-                issue_date=issue_date,
-                permit_class=r.get("permit_class", ""),
-                work_class=r.get("work_class", ""),
-                builder=r.get("contractor_company_name", "Unknown"),
-                contractor_name=r.get("contractor_full_name", ""),
-                applicant_name=r.get("applicant_full_name", ""),
-                applicant_org=r.get("applicant_org", ""),
-                housing_units=int(r.get("housing_units", 0) or 0),
-                floors=int(r.get("number_of_floors", 0) or 0),
-                status=r.get("status_current", ""),
-                permit_number=r.get("permit_num", r.get("permitnumber", "")),
-                permit_type=r.get("permittype", ""),
-                permit_type_desc=r.get("permit_type_desc", ""),
-            ))
-        return permits
-
-
-# ── Redfin Comps Module ──
-
-class RedfinComps:
-    REGION_CACHE = {}
-
-    def _get_region_id(self, zip_code: str) -> Optional[str]:
-        if zip_code in self.REGION_CACHE:
-            return self.REGION_CACHE[zip_code]
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-        }
-        try:
-            resp = requests.get(f'https://www.redfin.com/zipcode/{zip_code}', headers=headers, timeout=15)
-            if resp.status_code == 200:
-                matches = re.findall(r'region_id=(\d+)', resp.text)
-                for rid in matches:
-                    if rid != zip_code and len(rid) >= 4:
-                        self.REGION_CACHE[zip_code] = rid
-                        return rid
-                match2 = re.search(r'"regionId"\s*:\s*(\d+)', resp.text)
-                if match2 and match2.group(1) != zip_code:
-                    rid = match2.group(1)
-                    self.REGION_CACHE[zip_code] = rid
-                    return rid
-        except Exception:
-            pass
-        return None
-
-    def get_sold_comps(self, zip_code: str, lat: float = 0, lon: float = 0, radius_miles: float = 0) -> list[dict]:
-        """Get sold comps in ZIP via region_id. If lat/lon/radius provided, compute distance and filter."""
-        region_id = self._get_region_id(zip_code)
-        if not region_id:
-            return []
-        user_agents = [
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        ]
-        url = (
-            f'https://www.redfin.com/stingray/api/gis-csv?al=1&num_homes=200'
-            f'&ord=redfin-recommended-asc&page_number=1'
-            f'&region_id={region_id}&region_type=2'
-            f'&sold_within_days=730&status=9&uipt=1&v=8&min_year_built=2020'
-        )
-        for ua in user_agents:
-            try:
-                headers = {'User-Agent': ua}
-                resp = requests.get(url, headers=headers, timeout=20)
-                if resp.status_code != 200:
-                    time.sleep(2)
-                    continue
-                lines = resp.text.strip().split('\n')
-                header_idx = None
-                for i, line in enumerate(lines):
-                    if line.startswith('SALE TYPE') or line.startswith('"SALE TYPE'):
-                        header_idx = i
-                        break
-                if header_idx is None:
-                    continue
-                reader = csv.DictReader(io.StringIO('\n'.join(lines[header_idx:])))
-                comps = []
-                for row in reader:
-                    try:
-                        price_str = (row.get('PRICE') or '0').replace(',', '').replace('$', '')
-                        price = int(float(price_str)) if price_str else 0
-                        sqft_str = (row.get('SQUARE FEET') or '0').replace(',', '')
-                        sqft = int(float(sqft_str)) if sqft_str else 0
-                        year_str = row.get('YEAR BUILT') or '0'
-                        year = int(float(year_str)) if year_str else 0
-                        psf = round(price / sqft) if sqft > 0 else 0
-                        if price > 0 and year >= 2020:
-                            redfin_url = ''
-                            for key in row.keys():
-                                if key and 'URL' in key.upper():
-                                    redfin_url = row[key] or ''
-                                    break
-                            raw_addr = (row.get('ADDRESS') or '').strip()
-                            city = (row.get('CITY') or '').strip()
-                            state = (row.get('STATE OR PROVINCE') or 'TX').strip()
-                            zipcode = (row.get('ZIP OR POSTAL CODE') or '').strip()
-                            zillow_query = f"{raw_addr} {city} {state} {zipcode}".replace(' ', '-')
-                            dist = 0
-                            comp_lat = float(row.get('LATITUDE') or 0)
-                            comp_lon = float(row.get('LONGITUDE') or 0)
-                            if comp_lat and comp_lon and lat and lon:
-                                dist = ((comp_lat - lat) * 69) ** 2 + ((comp_lon - lon) * 60) ** 2
-                                dist = dist ** 0.5
-                            comps.append({
-                                'address': f"{raw_addr}, {city}",
-                                'price': price, 'sqft': sqft, 'psf': psf,
-                                'year_built': year,
-                                'sold_date': row.get('SOLD DATE') or '',
-                                'beds': row.get('BEDS') or '',
-                                'baths': row.get('BATHS') or '',
-                                'redfin_url': redfin_url,
-                                'zillow_url': f"https://www.zillow.com/homes/{zillow_query}_rb/",
-                                'distance_mi': round(dist, 2),
-                            })
-                    except (ValueError, ZeroDivisionError):
-                        continue
-                if radius_miles > 0 and lat and lon:
-                    comps = [c for c in comps if c.get('distance_mi', 99) <= radius_miles]
-                return sorted(comps, key=lambda x: x.get('distance_mi', 99))
-            except Exception:
-                time.sleep(2)
-                continue
-        return []
-
-    def get_active_listings(self, zip_code: str, lat: float = 0, lon: float = 0, radius_miles: float = 1.0) -> list[dict]:
-        """Get currently active (for sale) listings in ZIP, filtered by distance if lat/lon provided."""
-        region_id = self._get_region_id(zip_code)
-        if not region_id:
-            return []
-        user_agents = [
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        ]
-        url = (
-            f'https://www.redfin.com/stingray/api/gis-csv?al=1&num_homes=200'
-            f'&ord=redfin-recommended-asc&page_number=1'
-            f'&region_id={region_id}&region_type=2'
-            f'&status=1&uipt=1&v=8'
-        )
-        for ua in user_agents:
-            try:
-                headers = {'User-Agent': ua}
-                resp = requests.get(url, headers=headers, timeout=20)
-                if resp.status_code != 200:
-                    time.sleep(2)
-                    continue
-                lines = resp.text.strip().split('\n')
-                header_idx = None
-                for i, line in enumerate(lines):
-                    if line.startswith('SALE TYPE') or line.startswith('"SALE TYPE'):
-                        header_idx = i
-                        break
-                if header_idx is None:
-                    continue
-                reader = csv.DictReader(io.StringIO('\n'.join(lines[header_idx:])))
-                comps = []
-                for row in reader:
-                    try:
-                        price_str = (row.get('PRICE') or '0').replace(',', '').replace('$', '')
-                        price = int(float(price_str)) if price_str else 0
-                        sqft_str = (row.get('SQUARE FEET') or '0').replace(',', '')
-                        sqft = int(float(sqft_str)) if sqft_str else 0
-                        psf = round(price / sqft) if sqft > 0 else 0
-                        if price > 0:
-                            redfin_url = ''
-                            for key in row.keys():
-                                if key and 'URL' in key.upper():
-                                    redfin_url = row[key] or ''
-                                    break
-                            raw_addr = (row.get('ADDRESS') or '').strip()
-                            city = (row.get('CITY') or '').strip()
-                            state = (row.get('STATE OR PROVINCE') or 'TX').strip()
-                            zipcode = (row.get('ZIP OR POSTAL CODE') or '').strip()
-                            zillow_query = f"{raw_addr} {city} {state} {zipcode}".replace(' ', '-')
-                            comp_lat = float(row.get('LATITUDE') or 0)
-                            comp_lon = float(row.get('LONGITUDE') or 0)
-                            dist = 0
-                            if comp_lat and comp_lon:
-                                dist = ((comp_lat - lat) * 69) ** 2 + ((comp_lon - lon) * 60) ** 2
-                                dist = dist ** 0.5
-                            comps.append({
-                                'address': f"{raw_addr}, {city}",
-                                'price': price, 'sqft': sqft, 'psf': psf,
-                                'year_built': int(float(row.get('YEAR BUILT') or 0)),
-                                'beds': row.get('BEDS') or '',
-                                'baths': row.get('BATHS') or '',
-                                'days_on_market': row.get('DAYS ON MARKET') or '',
-                                'redfin_url': redfin_url,
-                                'zillow_url': f"https://www.zillow.com/homes/{zillow_query}_rb/",
-                                'distance_mi': round(dist, 2),
-                            })
-                    except (ValueError, ZeroDivisionError):
-                        continue
-                # Filter to within radius if lat/lon provided
-                if lat and lon:
-                    comps = [c for c in comps if c.get('distance_mi', 99) <= radius_miles]
-                return sorted(comps, key=lambda x: x.get('distance_mi', 99))
-            except Exception:
-                time.sleep(2)
-                continue
-        return []
-
-    def get_rental_listings(self, zip_code: str, lat: float = 0, lon: float = 0, radius_miles: float = 2.0) -> list[dict]:
-        """Get active rental listings in ZIP from Redfin, filtered by distance if lat/lon provided."""
-        region_id = self._get_region_id(zip_code)
-        if not region_id:
-            return []
-        user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        ]
-        # Redfin rental CSV: status=1 (active), is_rentals=true
-        url = (
-            f'https://www.redfin.com/stingray/api/gis-csv?al=1&num_homes=200'
-            f'&ord=redfin-recommended-asc&page_number=1'
-            f'&region_id={region_id}&region_type=2'
-            f'&status=1&uipt=1,2,3&v=8&is_rentals=true'
-        )
-        for ua in user_agents:
-            try:
-                headers = {'User-Agent': ua}
-                resp = requests.get(url, headers=headers, timeout=20)
-                if resp.status_code != 200:
-                    time.sleep(2)
-                    continue
-                lines = resp.text.strip().split('\n')
-                header_idx = None
-                for i, line in enumerate(lines):
-                    if line.startswith('SALE TYPE') or line.startswith('"SALE TYPE') or 'PRICE' in line.upper()[:50]:
-                        header_idx = i
-                        break
-                if header_idx is None:
-                    continue
-                reader = csv.DictReader(io.StringIO('\n'.join(lines[header_idx:])))
-                rentals = []
-                for row in reader:
-                    try:
-                        # For rentals, PRICE is monthly rent
-                        price_str = (row.get('PRICE') or row.get('PRICE/SQ.FT.') or '0').replace(',', '').replace('$', '').replace('/mo', '')
-                        rent = int(float(price_str)) if price_str else 0
-                        sqft_str = (row.get('SQUARE FEET') or '0').replace(',', '')
-                        sqft = int(float(sqft_str)) if sqft_str else 0
-                        rent_psf = round(rent / sqft, 2) if sqft > 0 else 0
-                        if rent > 0:
-                            redfin_url = ''
-                            for key in row.keys():
-                                if key and 'URL' in key.upper():
-                                    redfin_url = row[key] or ''
-                                    break
-                            raw_addr = (row.get('ADDRESS') or '').strip()
-                            city = (row.get('CITY') or '').strip()
-                            comp_lat = float(row.get('LATITUDE') or 0)
-                            comp_lon = float(row.get('LONGITUDE') or 0)
-                            dist = 0
-                            if comp_lat and comp_lon and lat and lon:
-                                dist = ((comp_lat - lat) * 69) ** 2 + ((comp_lon - lon) * 60) ** 2
-                                dist = dist ** 0.5
-                            rentals.append({
-                                'address': f"{raw_addr}, {city}",
-                                'rent': rent, 'sqft': sqft, 'rent_psf': rent_psf,
-                                'beds': row.get('BEDS') or '',
-                                'baths': row.get('BATHS') or '',
-                                'property_type': row.get('PROPERTY TYPE') or row.get('HOME TYPE') or '',
-                                'redfin_url': redfin_url,
-                                'distance_mi': round(dist, 2),
-                            })
-                    except (ValueError, ZeroDivisionError):
-                        continue
-                if lat and lon:
-                    rentals = [r for r in rentals if r.get('distance_mi', 99) <= radius_miles]
-                return sorted(rentals, key=lambda x: x.get('distance_mi', 99))
-            except Exception:
-                time.sleep(2)
-                continue
-        return []
-
-    def check_listing_status(self, address: str, zip_code: str) -> dict:
-        """Check if property is active, pending, or sold on Redfin."""
-        region_id = self._get_region_id(zip_code)
-        if not region_id:
-            return {'status': 'Unknown', 'url': ''}
-        user_agents = [
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        ]
-        # Extract street number + name for matching
-        addr_parts = address.upper().replace(',', '').split()
-        addr_num = addr_parts[0] if addr_parts else ''
-        addr_street = addr_parts[1] if len(addr_parts) > 1 else ''
-
-        # Check: 1=Active, 130=Pending/Under Contract, 9=Sold
-        for status_code, label in [(1, 'Active'), (130, 'Pending'), (9, 'Sold')]:
-            for ua in user_agents:
-                try:
-                    url = (
-                        f'https://www.redfin.com/stingray/api/gis-csv?al=1&num_homes=100'
-                        f'&region_id={region_id}&region_type=2'
-                        f'&status={status_code}&uipt=1&v=8'
-                    )
-                    headers = {'User-Agent': ua}
-                    resp = requests.get(url, headers=headers, timeout=20)
-                    if resp.status_code != 200:
-                        continue
-                    lines = resp.text.strip().split('\n')
-                    for i, line in enumerate(lines):
-                        if 'SALE TYPE' in line:
-                            reader = csv.DictReader(io.StringIO('\n'.join(lines[i:])))
-                            for row in reader:
-                                row_addr = (row.get('ADDRESS') or '').upper()
-                                if addr_num in row_addr and addr_street in row_addr:
-                                    redfin_url = ''
-                                    for key in row.keys():
-                                        if key and 'URL' in key.upper():
-                                            redfin_url = row[key] or ''
-                                            break
-                                    return {
-                                        'status': label,
-                                        'price': row.get('PRICE', ''),
-                                        'url': redfin_url,
-                                    }
-                            break
-                except Exception:
-                    continue
-        return {'status': 'Not Found', 'url': ''}
-
-def generate_report_bytes(result: AnalysisResult, address: str, zip_code: str,
-                          street_name: str, purchase_price: float,
-                          build_sf: float, exit_psf: float, build_cost_psf: float) -> bytes:
-    """Generate Word report and return as bytes."""
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-
-    doc = Document()
-    style = doc.styles['Normal']
-    style.font.name = 'Calibri'
-    style.font.size = Pt(10)
-
-    def set_cell_shading(cell, color):
-        shading = OxmlElement('w:shd')
-        shading.set(qn('w:fill'), color)
-        shading.set(qn('w:val'), 'clear')
-        cell._tc.get_or_add_tcPr().append(shading)
-
-    def add_table(headers, rows, header_color='1F4E79'):
-        table = doc.add_table(rows=1 + len(rows), cols=len(headers))
-        table.style = 'Table Grid'
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        for i, h in enumerate(headers):
-            cell = table.rows[0].cells[i]
-            cell.text = h
-            for p in cell.paragraphs:
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                for run in p.runs:
-                    run.bold = True
-                    run.font.size = Pt(8)
-                    run.font.color.rgb = RGBColor(255, 255, 255)
-            set_cell_shading(cell, header_color)
-        for r_idx, row in enumerate(rows):
-            for c_idx, val in enumerate(row):
-                cell = table.rows[r_idx + 1].cells[c_idx]
-                cell.text = str(val)
-                for p in cell.paragraphs:
-                    for run in p.runs:
-                        run.font.size = Pt(8)
-                if r_idx % 2 == 1:
-                    set_cell_shading(cell, 'F2F2F2')
-        return table
-
-    def fmt(val):
-        return f"${val:,.0f}" if val else "N/A"
-
-    # Title
-    title = doc.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run(f'{address}, {zip_code}')
-    run.bold = True
-    run.font.size = Pt(24)
-    run.font.color.rgb = RGBColor(31, 78, 121)
-
-    subtitle = doc.add_paragraph()
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run('Investment Analysis Report')
-    run.font.size = Pt(16)
-    run.font.color.rgb = RGBColor(89, 89, 89)
-
-    date_p = doc.add_paragraph()
-    date_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    date_p.add_run(datetime.now().strftime('%B %Y'))
-    doc.add_page_break()
-
-    # Permits section
-    doc.add_heading(f'Construction Permits — {street_name} St', level=1)
-    if result.street_permits:
-        active = [p for p in result.street_permits if p.status == 'Active']
-        final = [p for p in result.street_permits if p.status == 'Final']
-        if active:
-            doc.add_heading('Under Construction (Active)', level=2)
-            rows = [[p.address, f"{p.sqft:,.0f} sf", p.issue_date, p.builder, p.permit_class]
-                    for p in active]
-            add_table(['Address', 'Size', 'Permit Date', 'Builder', 'Type'], rows, header_color='D4A017')
-        if final:
-            doc.add_heading('Completed Projects', level=2)
-            rows = [[p.address, f"{p.sqft:,.0f} sf", p.issue_date, p.builder, p.permit_class]
-                    for p in final]
-            add_table(['Address', 'Size', 'Permit Date', 'Builder', 'Type'], rows)
-    else:
-        doc.add_paragraph('No new construction permits found.')
-
-    doc.add_page_break()
-
-    # Redfin comps section
-    doc.add_heading(f'Sold Comps — {zip_code} (New Construction)', level=1)
-    if result.redfin_comps:
-        stats = result.market_stats
-        add_table(['Metric', 'Value'], [
-            ['Median $/sf', f"${stats.get('median_psf', 0)}/sf"],
-            ['Average $/sf', f"${stats.get('avg_psf', 0)}/sf"],
-            ['Range', f"${stats.get('min_psf', 0)} — ${stats.get('max_psf', 0)}/sf"],
-            ['Count', str(stats.get('count', 0))],
-        ])
-        doc.add_paragraph()
-        comps_sorted = sorted(result.redfin_comps, key=lambda x: x.get("psf", 0), reverse=True)
-        rows = [[c["address"], fmt(c.get("price", 0)), f"{c.get('sqft', 0):,} sf",
-                 f"${c.get('psf', 0)}/sf", str(c.get('year_built', '')), c.get('sold_date', '')]
-                for c in comps_sorted if c.get("psf", 0) > 0]
-        add_table(['Address', 'Price', 'Size', '$/sf', 'Built', 'Sold'], rows)
-    else:
-        doc.add_paragraph('No Redfin comps available.')
-
-    doc.add_page_break()
-
-    # Investment analysis
-    if purchase_price > 0 and build_sf > 0:
-        doc.add_heading('Investment Analysis', level=1)
-        total_build_cost = build_cost_psf * build_sf
-        median_psf = result.market_stats.get("median_psf", 0)
-
-        add_table(['Parameter', 'Value'], [
-            ['Purchase Price', fmt(purchase_price)],
-            ['Build Size', f"{build_sf:,.0f} sf"],
-            [f'Build Cost @ ${build_cost_psf:,.0f}/sf', fmt(total_build_cost)],
-            ['Exit Assumption', f"${exit_psf}/sf" if exit_psf else "N/A"],
-            ['Market Median', f"${median_psf}/sf" if median_psf else "N/A"],
-        ])
-
-        doc.add_heading('Exit Scenarios', level=2)
-        scenarios = []
-        test_psfs = set()
-        if median_psf:
-            test_psfs.update([median_psf, median_psf + 25, median_psf + 50])
-        if exit_psf:
-            test_psfs.add(exit_psf)
-        for psf in sorted(test_psfs):
-            if psf > 0:
-                revenue = psf * build_sf
-                total_cost = purchase_price + total_build_cost + (total_build_cost * 0.10)
-                profit = revenue - total_cost
-                margin = (profit / total_cost) * 100
-                scenarios.append([f"${psf}/sf", fmt(revenue), fmt(total_cost), fmt(profit),
-                                  f"{margin:.1f}%", "✅" if margin > 10 else ("⚠" if margin > 0 else "❌")])
-        add_table(['Exit $/sf', 'Revenue', 'Total Cost', 'Profit', 'Margin', ''], scenarios)
-
-    # Sources
-    doc.add_page_break()
-    doc.add_heading('Data Sources', level=1)
-    for name, desc, status in [
-        ('Austin Open Data', 'Construction Permits API', result.sources_status.get('permits', '✅')),
-        ('Redfin', 'Sold comps CSV API', result.sources_status.get('redfin', '✅')),
-        ('TCAD', 'Property appraisals & deeds', '⚠ Run locally with CLI tool for TCAD data'),
-    ]:
-        p = doc.add_paragraph()
-        run = p.add_run(f'{status} {name}: ')
-        run.bold = True
-        p.add_run(desc)
-
-    p = doc.add_paragraph()
-    run = p.add_run('\nDisclaimer: ')
-    run.bold = True
-    p.add_run('Texas is a non-disclosure state. Actual sale prices are not in public deed records. '
-              'This report is for informational purposes only.')
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
-# ── Analysis Runner ──
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def run_analysis(address: str, zip_code: str, street_name: str):
-    """Run permits + Redfin analysis (cached for 1 hour)."""
-    result = AnalysisResult()
-    permits_api = AustinPermits()
-    redfin_api = RedfinComps()
-
-    # Permits
-    result.street_permits = permits_api.search_street(street_name, zip_code)
-    result.street_all_permits = permits_api.search_street_all_types(street_name, zip_code)
-    result.zip_permits = permits_api.search_zip(zip_code)
-    result.sources_status['permits'] = '✅' if result.street_permits or result.zip_permits else '⚠'
-
-    # Geocode for radius-based queries
-    lat, lon = geocode_address(address, zip_code)
-
-    # Redfin — Sold comps (1 mile radius, fallback to ZIP-wide)
-    comps_radius = True
-    if lat and lon:
-        result.redfin_comps = redfin_api.get_sold_comps(zip_code, lat, lon, radius_miles=1.0)
-    if not result.redfin_comps:
-        result.redfin_comps = redfin_api.get_sold_comps(zip_code, lat, lon, radius_miles=0)
-        comps_radius = False
-    if result.redfin_comps:
-        psf_values = sorted([c["psf"] for c in result.redfin_comps if c.get("psf", 0) > 0])
-        if psf_values:
-            mid = len(psf_values) // 2
-            result.market_stats = {
-                "median_psf": psf_values[mid],
-                "avg_psf": round(sum(psf_values) / len(psf_values)),
-                "min_psf": min(psf_values),
-                "max_psf": max(psf_values),
-                "count": len(psf_values),
-            }
-        result.sources_status['redfin'] = '✅'
-        result.sources_status['comps_radius'] = comps_radius
-    else:
-        result.sources_status['redfin'] = '⚠ No data'
-        # Fallback: use Census Bureau median home value to estimate $/sf
-        try:
-            census = fetch_census_home_value(zip_code)
-            if census.get('median_value') and census['median_value'] > 0:
-                # Estimate $/sf from Census median value / typical new construction size
-                typical_sf = 1800  # typical new construction in Austin
-                est_psf = round(census['median_value'] / typical_sf)
-                result.market_stats = {
-                    "median_psf": est_psf,
-                    "avg_psf": est_psf,
-                    "min_psf": est_psf,
-                    "max_psf": est_psf,
-                    "count": 0,
-                    "source": "Census Bureau (estimated)",
-                }
-                result.sources_status['redfin'] = '⚠ Census fallback'
-        except Exception:
-            pass
-
-    # Listing status (active/pending/sold)
-    result.listing_status = redfin_api.check_listing_status(address, zip_code)
-
-    # Neighborhood comps are now the same as sold comps (both 1 mile)
-    if lat and lon:
-        result.neighborhood_comps = result.redfin_comps
-        result.neighborhood_stats = result.market_stats
-
-        # Active listings (1 mile radius)
-        result.active_comps = redfin_api.get_active_listings(zip_code, lat, lon, radius_miles=1.0)
-        if result.active_comps:
-            a_psf = sorted([c["psf"] for c in result.active_comps if c.get("psf", 0) > 0])
-            if a_psf:
-                mid = len(a_psf) // 2
-                result.active_stats = {
-                    "median_psf": a_psf[mid],
-                    "avg_psf": round(sum(a_psf) / len(a_psf)),
-                    "min_psf": min(a_psf),
-                    "max_psf": max(a_psf),
-                    "count": len(a_psf),
-                }
-
-        # Rental listings — Redfin CSV doesn't support rentals, so skip
-        # Users can research rentals via the links in the Rental Comps tab
-
-    return result
-
-
-def extract_street_name(address: str) -> str:
-    parts = address.upper().replace(",", "").split()
-    suffixes = {"ST", "STREET", "AVE", "AVENUE", "DR", "DRIVE", "LN", "LANE",
-                "BLVD", "BOULEVARD", "CT", "COURT", "WAY", "RD", "ROAD",
-                "CIR", "CIRCLE", "PL", "PLACE", "TRL", "TRAIL", "PKWY", "PARKWAY"}
-    street_parts = [p for p in parts[1:] if p not in suffixes]
-    return " ".join(street_parts) if street_parts else (parts[1] if len(parts) > 1 else parts[0])
-
-
-# ── Plot Info Module ──
-
-ARCGIS_BASE = "https://services.arcgis.com/0L95CJ0VTaxqcmED/ArcGIS/rest/services"
-
-# Austin zoning density rules (approximate max units per lot)
-ZONING_INFO = {
-    "SF-1": {
-        "desc": "Single Family Residence - Large Lot",
-        "max_units": 1, "min_lot_sf": 10000,
-        "plain": "Only one house allowed. Large lot (¼ acre+). Think suburban estate feel.",
-        "can_build": "1 single-family home + 1 ADU (accessory dwelling unit, like a garage apartment)",
-        "height": "35 ft (2-3 stories)",
-    },
-    "SF-2": {
-        "desc": "Single Family Residence - Standard Lot",
-        "max_units": 1, "min_lot_sf": 5750,
-        "plain": "Typical Austin residential neighborhood. One house per lot, standard-sized yard.",
-        "can_build": "1 single-family home + 1 ADU. Duplex NOT allowed unless you get a zoning change.",
-        "height": "35 ft (2-3 stories)",
-    },
-    "SF-3": {
-        "desc": "Single Family Residence - Standard Lot (more flexible)",
-        "max_units": 1, "min_lot_sf": 5750,
-        "plain": "Same as SF-2 but slightly more flexible. Most common residential zoning in Austin.",
-        "can_build": "1 single-family home + 1 ADU. Duplexes allowed on corner lots in some cases.",
-        "height": "35 ft (2-3 stories)",
-    },
-    "SF-4A": {
-        "desc": "Single Family - Small Lot",
-        "max_units": 1, "min_lot_sf": 3500,
-        "plain": "Smaller lots, urban infill. Great for compact new construction.",
-        "can_build": "1 single-family home + 1 ADU on a smaller lot",
-        "height": "35 ft (2-3 stories)",
-    },
-    "SF-5": {
-        "desc": "Single Family - Urban",
-        "max_units": 1, "min_lot_sf": 2500,
-        "plain": "Very small urban lots. Townhome-style development possible.",
-        "can_build": "1 single-family home or townhome + 1 ADU",
-        "height": "35 ft (2-3 stories)",
-    },
-    "SF-6": {
-        "desc": "Townhouse / Condo",
-        "max_units": 8, "min_lot_sf": 2500,
-        "plain": "Allows multiple attached units (townhomes, condos). Good for small-scale development.",
-        "can_build": "Up to 8 townhome/condo units depending on lot size",
-        "height": "35 ft (2-3 stories)",
-    },
-    "MF-1": {
-        "desc": "Multifamily - Low Density",
-        "max_units": "18/acre", "min_lot_sf": 8000,
-        "plain": "Small apartment buildings, duplexes, fourplexes. Residential feel but multiple units.",
-        "can_build": "~18 units per acre. On a 7,000 sf lot ≈ 2-3 units.",
-        "height": "40 ft (3 stories)",
-    },
-    "MF-2": {
-        "desc": "Multifamily - Low-Medium Density",
-        "max_units": "25/acre", "min_lot_sf": 8000,
-        "plain": "Medium apartment buildings. Common along transit corridors.",
-        "can_build": "~25 units per acre. On a 7,000 sf lot ≈ 4 units.",
-        "height": "40 ft (3 stories)",
-    },
-    "MF-3": {
-        "desc": "Multifamily - Medium Density",
-        "max_units": "36/acre", "min_lot_sf": 8000,
-        "plain": "Larger apartment complexes. Urban mixed-use areas.",
-        "can_build": "~36 units per acre.",
-        "height": "40 ft (3 stories)",
-    },
-    "MF-4": {
-        "desc": "Multifamily - Moderate-High Density",
-        "max_units": "54/acre", "min_lot_sf": 8000,
-        "plain": "Dense apartment buildings. Downtown-adjacent areas.",
-        "can_build": "~54 units per acre.",
-        "height": "60 ft (5 stories)",
-    },
-    "MF-5": {
-        "desc": "Multifamily - High Density",
-        "max_units": "No max", "min_lot_sf": 8000,
-        "plain": "High-rise apartments. No unit cap — limited by building size/FAR.",
-        "can_build": "No unit maximum. Limited by floor-area ratio and height.",
-        "height": "60 ft (5 stories)",
-    },
-    "MF-6": {
-        "desc": "Multifamily - Highest Density",
-        "max_units": "No max", "min_lot_sf": 10000,
-        "plain": "Tallest residential buildings. Downtown high-rises.",
-        "can_build": "No unit maximum. Tallest allowed residential.",
-        "height": "No limit",
-    },
+# ── Custom CSS ──
+st.markdown("""
+<style>
+/* Clean card-like metrics */
+div[data-testid="stMetric"] {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 15px 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+div[data-testid="stMetric"] label {
+    font-size: 0.85rem !important;
+    color: #6c757d !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+    font-size: 1.4rem !important;
+    font-weight: 700 !important;
 }
 
-# Plain-English overlay explanations
-OVERLAY_EXPLANATIONS = {
-    "-NP": (
-        "🏘️ **Neighborhood Plan (NP)**",
-        "This property is in a Neighborhood Plan area. The neighborhood has agreed to extra rules about "
-        "what can be built — things like building height, setbacks, parking, and design standards. "
-        "You may need to attend a neighborhood meeting before getting permits. "
-        "Check the specific plan at [Austin Neighborhood Plans](https://www.austintexas.gov/department/neighborhood-plans)."
-    ),
-    "-CO": (
-        "📋 **Conditional Overlay (CO)**",
-        "This lot has special conditions attached by the City. These are specific rules that override "
-        "the base zoning — for example, limiting hours of operation, requiring extra landscaping, or "
-        "restricting certain uses. You MUST check the specific conditions with the City of Austin."
-    ),
-    "-H": (
-        "🏛️ **Historic (H)**",
-        "This property is in a historic district. Renovations and new construction must follow strict "
-        "design guidelines to preserve neighborhood character. Demolition may be restricted or prohibited."
-    ),
-    "-V": (
-        "🌿 **Vertical Mixed Use (V/VMU)**",
-        "Allows ground-floor commercial with residential above. Great for mixed-use development. "
-        "May get density bonuses if affordable housing is included."
-    ),
+/* Cleaner expander styling */
+div[data-testid="stExpander"] {
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    margin-bottom: 8px;
 }
 
-
-@st.cache_data(ttl=3600)
-def fetch_census_rents(zip_code: str) -> dict:
-    """Fetch median rent data from Census Bureau ACS 5-year survey (no API key needed)."""
-    try:
-        url = 'https://api.census.gov/data/2022/acs/acs5'
-        params = {
-            'get': 'B25064_001E,B25031_002E,B25031_003E,B25031_004E,B25031_005E,B25031_006E',
-            'for': f'zip code tabulation area:{zip_code}'
-        }
-        resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code != 200:
-            return {}
-        data = resp.json()
-        if len(data) < 2:
-            return {}
-        values = data[1]
-        def _int(v):
-            try:
-                return int(v) if v and int(v) > 0 else None
-            except (ValueError, TypeError):
-                return None
-        return {
-            'median_rent': _int(values[0]),
-            'rent_0br': _int(values[1]),
-            'rent_1br': _int(values[2]),
-            'rent_2br': _int(values[3]),
-            'rent_3br': _int(values[4]),
-            'rent_4br_plus': _int(values[5]),
-            'source': 'Census ACS 5-Year (2022)',
-        }
-    except Exception:
-        return {}
-
-
-def fetch_census_home_value(zip_code: str) -> dict:
-    """Fetch median home value from Census Bureau ACS (no API key needed)."""
-    try:
-        url = 'https://api.census.gov/data/2022/acs/acs5'
-        params = {
-            'get': 'B25077_001E',
-            'for': f'zip code tabulation area:{zip_code}'
-        }
-        resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code != 200:
-            return {}
-        data = resp.json()
-        if len(data) < 2:
-            return {}
-        val = data[1][0]
-        return {'median_value': int(val) if val else 0}
-    except Exception:
-        return {}
-
-
-def geocode_address(address: str, zip_code: str):
-    """Geocode address using Census Bureau geocoder, fallback to Nominatim."""
-    # Try Census geocoder first
-    try:
-        params = {
-            'address': f'{address}, Austin, TX {zip_code}',
-            'benchmark': 'Public_AR_Current',
-            'format': 'json',
-        }
-        r = requests.get('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress',
-                        params=params, timeout=15)
-        matches = r.json().get('result', {}).get('addressMatches', [])
-        if matches:
-            coords = matches[0]['coordinates']
-            return coords['y'], coords['x']
-    except Exception:
-        pass
-    # Fallback to Nominatim
-    try:
-        r = requests.get('https://nominatim.openstreetmap.org/search',
-                        params={'q': f'{address}, Austin, TX {zip_code}', 'format': 'json', 'limit': 1},
-                        headers={'User-Agent': 'RE-Analyzer/1.0'}, timeout=15)
-        data = r.json()
-        if data:
-            return float(data[0]['lat']), float(data[0]['lon'])
-    except Exception:
-        pass
-    return None, None
-
-
-@st.cache_data(ttl=3600)
-def fetch_plot_info(lat: float, lon: float, address: str = ""):
-    """Fetch zoning, parcel, and flood data from Austin ArcGIS."""
-    plot_data = {}
-    buf = 0.0003  # ~30 meters buffer for envelope queries
-
-    # Extract address number for parcel matching
-    addr_num = ""
-    parts = address.split()
-    if parts and parts[0].isdigit():
-        addr_num = parts[0]
-
-    # Zoning (use envelope/buffer since point can miss on parcel boundaries)
-    try:
-        url = f'{ARCGIS_BASE}/Current_Zoning_gdb/FeatureServer/0/query'
-        buf = 0.0003  # ~30 meters buffer
-        params = {
-            'geometry': f'{lon-buf},{lat-buf},{lon+buf},{lat+buf}',
-            'geometryType': 'esriGeometryEnvelope',
-            'spatialRel': 'esriSpatialRelIntersects',
-            'inSR': '4326', 'outFields': '*', 'f': 'json', 'returnGeometry': 'false',
-        }
-        r = requests.get(url, params=params, timeout=15)
-        features = r.json().get('features', [])
-        if features:
-            attrs = features[0]['attributes']
-            plot_data['zoning'] = {
-                'zoning_type': attrs.get('ZONING_ZTYPE', ''),
-                'base_zone': attrs.get('BASE_ZONE', ''),
-                'zone_name': attrs.get('ZONE_NAME', ''),
-                'lot_area_sf': round(attrs.get('SHAPE__Area', 0)),
-            }
-    except Exception:
-        pass
-
-    # TCAD Parcel (use envelope since point can miss on boundaries)
-    try:
-        url = f'{ARCGIS_BASE}/EXTERNAL_tcad_parcel/FeatureServer/0/query'
-        params = {
-            'geometry': f'{lon-buf},{lat-buf},{lon+buf},{lat+buf}',
-            'geometryType': 'esriGeometryEnvelope',
-            'spatialRel': 'esriSpatialRelIntersects',
-            'inSR': '4326', 'outFields': '*', 'f': 'json', 'returnGeometry': 'false',
-        }
-        r = requests.get(url, params=params, timeout=15)
-        features = r.json().get('features', [])
-        if features:
-            # Match by address number if multiple parcels returned
-            best = features[0]
-            if addr_num and len(features) > 1:
-                for f in features:
-                    situs = str(f['attributes'].get('SITUS', ''))
-                    if situs == addr_num:
-                        best = f
-                        break
-            attrs = best['attributes']
-            plot_data['parcel'] = {
-                'prop_id': attrs.get('PROP_ID', ''),
-                'pid': attrs.get('PID_10', ''),
-                'situs': attrs.get('SITUS', ''),
-                'lot': attrs.get('LOTS', ''),
-                'block': attrs.get('BLOCKS', ''),
-                'parcel_area_sf': round(attrs.get('Shape__Area', 0)),
-            }
-    except Exception:
-        pass
-
-    # FEMA Flood (use envelope)
-    try:
-        url = f'{ARCGIS_BASE}/INLANDWATERS_greater_austin_fema_floodplain/FeatureServer/0/query'
-        params = {
-            'geometry': f'{lon-buf},{lat-buf},{lon+buf},{lat+buf}',
-            'geometryType': 'esriGeometryEnvelope',
-            'spatialRel': 'esriSpatialRelIntersects',
-            'inSR': '4326', 'outFields': '*', 'f': 'json', 'returnGeometry': 'false',
-        }
-        r = requests.get(url, params=params, timeout=15)
-        features = r.json().get('features', [])
-        plot_data['flood'] = {
-            'in_floodplain': len(features) > 0,
-            'zone': features[0]['attributes'].get('FLD_ZONE', '') if features else 'None (X - Minimal Risk)',
-        }
-    except Exception:
-        plot_data['flood'] = {'in_floodplain': False, 'zone': 'Unable to determine'}
-
-    return plot_data
-
-
-# ══════════════════════════════════════════════════════════════
-#  EXCEL EXPORT — Generate multi-sheet workbook
-# ══════════════════════════════════════════════════════════════
-
-def _compute_hold_profit(purchase_price, build_sf, build_cost, exit_price, exit_cost_pct,
-                         hard_contingency_pct, soft_cost_pct, soft_contingency,
-                         ltv, interest_rate, draw_factor, loan_fee_pct,
-                         build_months, hold_months, delay_months,
-                         perm_mortgage_rate, amortization_years,
-                         rent_per_unit, units, vacancy_pct, mgmt_fee_pct,
-                         prop_tax_rate, taxable_value_psf, insurance_monthly,
-                         repairs_per_unit, common_utilities, leasing_reserve,
-                         const_tax_rate=2.0, const_insurance_annual=6750,
-                         const_utilities_mo=450, const_misc_mo=325,
-                         carry_buffer_pct=12.5,
-                         staging_base=1500, staging_per_unit=3500,
-                         marketing_base=2000, marketing_per_unit=1500,
-                         warranty_per_unit=1750, sale_hold_months=1.5):
-    """Recompute profit & equity multiple for a given build_cost/exit_price combo."""
-    hc = build_cost * build_sf
-    hcont = hc * (hard_contingency_pct / 100)
-    sc = hc * (soft_cost_pct / 100)
-    tdc = hc + hcont + sc + soft_contingency
-    tpc = purchase_price + tdc
-
-    la = tdc * (ltv / 100)
-    lf = la * (loan_fee_pct / 100)
-
-    # Carry costs (matching main model: loan interest on land+dev)
-    cm = build_months + delay_months
-    ci = (purchase_price + tdc) * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * cm / 12
-    ct = (purchase_price + 0.5 * tdc) * (const_tax_rate / 100) * cm / 12
-    cins = const_insurance_annual * cm / 12
-    cutil = const_utilities_mo * cm
-    cmisc = const_misc_mo * cm
-    csub = ci + ct + cins + cutil + cmisc
-    cbuf = csub * (carry_buffer_pct / 100)
-    tcarry = csub + cbuf
-
-    # Sales costs
-    rev = exit_price * build_sf
-    var_sales = rev * (exit_cost_pct / 100)
-    stg = staging_base + staging_per_unit * units
-    mkt = marketing_base + marketing_per_unit * units
-    war = warranty_per_unit * units
-    hds = tcarry / max(cm, 1) * sale_hold_months
-    tsales = var_sales + stg + mkt + war + hds
-
-    if hold_months > 0:
-        mpr = perm_mortgage_rate / 100 / 12
-        npay = amortization_years * 12
-        if mpr > 0:
-            mds = la * (mpr * (1 + mpr) ** npay) / ((1 + mpr) ** npay - 1)
-        else:
-            mds = la / npay
-        hi = mds * hold_months
-
-        if mpr > 0:
-            lbal = la * (1 + mpr) ** hold_months - mds * ((1 + mpr) ** hold_months - 1) / mpr
-        else:
-            lbal = la - mds * hold_months
-
-        gr = rent_per_unit * units * hold_months
-        er = gr * (1 - vacancy_pct / 100)
-        mc = er * (mgmt_fee_pct / 100)
-        pt = build_sf * taxable_value_psf * (prop_tax_rate / 100) * hold_months / 12
-        ins = insurance_monthly * hold_months
-        rep = repairs_per_unit * units * hold_months
-        mi = common_utilities * hold_months
-        lea = leasing_reserve * hold_months
-        mnoi = (er - mc - pt - ins - rep - mi - lea) / max(hold_months, 1)
-        mcf = mnoi - mds
-        cum_cf = mcf * hold_months
-        aeq = max(0, -cum_cf)
-        tei = purchase_price + tcarry + lf + aeq
-
-        ec = rev * (exit_cost_pct / 100)
-        nsbd = rev - ec
-        nsad = nsbd - lbal
-        pcf = max(0, cum_cf)
-        tcr = nsad + pcf
-        profit = tcr - tei
-        em = tcr / tei if tei > 0 else 0
-    else:
-        tc = tpc + lf + tcarry + tsales
-        tei = tc
-        profit = rev - tc
-        em = rev / tc if tc > 0 else 0
-
-    return profit, em
-
-
-def generate_excel_bytes(
-    # Sidebar inputs
-    units, per_unit_sf, build_sf, purchase_price, build_cost_psf, exit_psf,
-    build_months, hold_months, delay_months,
-    hard_contingency_pct, soft_cost_pct, soft_contingency,
-    ltv, interest_rate, draw_factor, loan_fee_pct,
-    perm_mortgage_rate, amortization_years,
-    rent_per_unit, vacancy_pct, mgmt_fee_pct,
-    prop_tax_rate, taxable_value_psf, insurance_monthly,
-    repairs_per_unit, common_utilities, leasing_reserve,
-    exit_cost_pct, price_decline,
-    split_soft, arch_pct, eng_pct, permit_fee_pct, survey_pct, insurance_dev_pct, other_soft_pct,
-    broker_fee_pct, title_closing_pct, seller_concessions_pct,
-    # Carry/sales cost params
-    const_tax_rate, const_insurance_annual,
-    const_utilities, const_misc, carry_buffer_pct,
-    staging_base, staging_per_unit,
-    marketing_base, marketing_per_unit,
-    warranty_per_unit, sale_hold_months,
-    # Computed values
-    hard_cost, hard_contingency, soft_costs, total_dev_cost, total_project_cost,
-    loan_amount, equity, construction_interest, loan_fees,
-    hold_interest, gross_rent, effective_rent,
-    total_hold_expenses, net_rental_income,
-    monthly_debt_service, loan_balance_after_hold,
-    total_equity_invested, user_profit, user_revenue,
-    breakeven_psf, exit_costs_user, total_cost, equity_multiple,
-    # Hold-specific
-    additional_equity_needed, cumulative_cf, net_sale_before_debt, net_sale_after_debt,
-    positive_rental_cf, total_cash_returned,
-    # OPEX
-    mgmt_cost, prop_tax, insurance, repairs, misc, leasing,
-    monthly_noi, monthly_cf_after_debt,
-):
-    """Build a multi-sheet Excel workbook and return bytes."""
-    wb = Workbook()
-
-    # Styles
-    bold = Font(bold=True)
-    bold_white = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="4472C4")
-    yellow_fill = PatternFill("solid", fgColor="FFF2CC")
-    green_fill = PatternFill("solid", fgColor="E2EFDA")
-    orange_fill = PatternFill("solid", fgColor="FCE4D6")
-    light_blue_fill = PatternFill("solid", fgColor="D6E4F0")
-    dollar_fmt = '$#,##0'
-    dollar_fmt2 = '$#,##0.00'
-    pct_fmt = '0.0%'
-    pct_fmt2 = '0.00%'
-    num_fmt = '#,##0'
-    mult_fmt = '0.00x'
-    thin_border = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'), bottom=Side(style='thin')
-    )
-
-    def _header_row(ws, row, cols, fill=header_fill):
-        for c, val in enumerate(cols, 1):
-            cell = ws.cell(row=row, column=c, value=val)
-            cell.font = bold_white
-            cell.fill = fill
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal='center')
-
-    def _data_row(ws, row, vals, fills=None, fmts=None):
-        for c, val in enumerate(vals, 1):
-            cell = ws.cell(row=row, column=c, value=val)
-            cell.border = thin_border
-            if fills and c <= len(fills) and fills[c - 1]:
-                cell.fill = fills[c - 1]
-            if fmts and c <= len(fmts) and fmts[c - 1]:
-                cell.number_format = fmts[c - 1]
-
-    # ═══════════════════════════════════════════
-    # SHEET 1: Hold Model
-    # ═══════════════════════════════════════════
-    ws1 = wb.active
-    ws1.title = "Hold Model"
-    ws1.sheet_properties.tabColor = "4472C4"
-
-    # Set column widths
-    ws1.column_dimensions['A'].width = 35
-    ws1.column_dimensions['B'].width = 18
-    ws1.column_dimensions['C'].width = 14
-    ws1.column_dimensions['D'].width = 14
-    ws1.column_dimensions['E'].width = 30
-
-    r = 1
-    # ── Section 1: Assumptions ──
-    ws1.cell(row=r, column=1, value="ASSUMPTIONS").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws1, r, ["Assumption", "Value", "Unit", "Type", "Notes"])
-    r += 1
-
-    assumptions = [
-        ("Units", units, "units", "Input", ""),
-        ("Sq Ft / Unit", per_unit_sf, "sf", "Calc", "build_sf / units"),
-        ("Total Sq Ft", build_sf, "sf", "Input", ""),
-        ("Land Equity", purchase_price, "$", "Input", "Purchase price"),
-        ("Build Cost $/sf", build_cost_psf, "$/sf", "Input", ""),
-        ("Exit Price $/sf", exit_psf, "$/sf", "Input", "Target sale price"),
-        ("Build Duration", build_months, "months", "Input", ""),
-        ("Hold Period", hold_months, "months", "Input", "After build completion"),
-        ("Expected Delays", delay_months, "months", "Input", ""),
-        ("Hard Cost Contingency %", hard_contingency_pct / 100, "%", "Input", ""),
-        ("Soft Cost %", soft_cost_pct / 100, "%", "Input", "Of hard cost"),
-        ("Soft Contingency $", soft_contingency, "$", "Input", "Fixed amount"),
-        ("Construction Debt Funding %", ltv / 100, "%", "Input", "LTC on dev costs"),
-        ("Construction Interest Rate %", interest_rate / 100, "%", "Input", "Annual"),
-        ("Draw Factor %", draw_factor / 100, "%", "Input", ""),
-        ("Loan Fees %", loan_fee_pct / 100, "%", "Input", ""),
-        ("Perm Mortgage Rate %", perm_mortgage_rate / 100, "%", "Input", "Annual"),
-        ("Amortization", amortization_years, "years", "Input", ""),
-        ("Rent / Unit / Month", rent_per_unit, "$/mo", "Input", ""),
-        ("Vacancy %", vacancy_pct / 100, "%", "Input", ""),
-        ("Management Fee %", mgmt_fee_pct / 100, "%", "Input", "Of EGI"),
-        ("Property Tax Rate %", prop_tax_rate / 100, "%", "Input", "Annual"),
-        ("Taxable Value Basis $/sf", taxable_value_psf, "$/sf", "Input", ""),
-        ("Insurance $/mo", insurance_monthly, "$/mo", "Input", ""),
-        ("Repairs Reserve $/unit/mo", repairs_per_unit, "$/mo", "Input", ""),
-        ("Common Utilities $/mo", common_utilities, "$/mo", "Input", ""),
-        ("Leasing Reserve $/mo", leasing_reserve, "$/mo", "Input", ""),
-        ("Exit Cost %", exit_cost_pct / 100, "%", "Calc", f"Broker {broker_fee_pct}% + Title {title_closing_pct}% + Concessions {seller_concessions_pct}%"),
-    ]
-
-    for label, val, unit, typ, note in assumptions:
-        fmt_b = None
-        if unit == "$" or unit == "$/sf" or unit == "$/mo":
-            fmt_b = dollar_fmt
-        elif unit == "%":
-            fmt_b = pct_fmt
-        _data_row(ws1, r, [label, val, unit, typ, note],
-                  fills=[None, yellow_fill, None, None, None],
-                  fmts=[None, fmt_b, None, None, None])
-        r += 1
-
-    # ── Section 2: Development Cost & Construction Debt ──
-    r += 1
-    ws1.cell(row=r, column=1, value="DEVELOPMENT COST & CONSTRUCTION DEBT").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws1, r, ["Line Item", "Formula / Basis", "Amount", "Notes"])
-    r += 1
-
-    dev_items = [
-        ("Hard Cost", f"{build_cost_psf} × {build_sf:,} sf", hard_cost, ""),
-        ("Hard Cost Contingency", f"{hard_contingency_pct}% of Hard Cost", hard_contingency, ""),
-        ("Soft Cost", f"{soft_cost_pct:.1f}% of Hard Cost", soft_costs, ""),
-        ("Soft Contingency", "Fixed", soft_contingency, ""),
-        ("Non-Land Development Cost", "Sum above", total_dev_cost, ""),
-        ("Construction Debt", f"{ltv}% LTC", loan_amount, ""),
-        ("Construction Interest During Build", f"{interest_rate}% × {draw_factor}% draw × {build_months + delay_months} mo", construction_interest, ""),
-        ("Construction Loan Fees", f"{loan_fee_pct}% of loan", loan_fees, ""),
-    ]
-    for label, basis, amt, note in dev_items:
-        _data_row(ws1, r, [label, basis, amt, note],
-                  fills=[None, None, green_fill, None],
-                  fmts=[None, None, dollar_fmt, None])
-        r += 1
-
-    # ── Section 3: Monthly Rental OPEX & Cash Flow ──
-    r += 1
-    ws1.cell(row=r, column=1, value="MONTHLY RENTAL OPEX & CASH FLOW").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws1, r, ["Line Item", "Formula / Basis", "Monthly", "Annual", "Notes"])
-    r += 1
-
-    hm = max(hold_months, 1)
-    monthly_gross = rent_per_unit * units
-    monthly_vacancy = monthly_gross * (vacancy_pct / 100)
-    monthly_egi = monthly_gross - monthly_vacancy
-    monthly_mgmt = monthly_egi * (mgmt_fee_pct / 100)
-    monthly_proptax = build_sf * taxable_value_psf * (prop_tax_rate / 100) / 12
-    monthly_ins = insurance_monthly
-    monthly_repairs = repairs_per_unit * units
-    monthly_utils = common_utilities
-    monthly_leasing = leasing_reserve
-    monthly_total_opex = monthly_mgmt + monthly_proptax + monthly_ins + monthly_repairs + monthly_utils + monthly_leasing
-
-    opex_items = [
-        ("Gross Rent", f"{rent_per_unit:,.0f} × {units} units", monthly_gross, monthly_gross * 12, ""),
-        ("Vacancy", f"{vacancy_pct}%", -monthly_vacancy, -monthly_vacancy * 12, ""),
-        ("Effective Gross Income", "", monthly_egi, monthly_egi * 12, ""),
-        ("Management Fee", f"{mgmt_fee_pct}% of EGI", -monthly_mgmt, -monthly_mgmt * 12, ""),
-        ("Property Taxes", f"{prop_tax_rate}% of {taxable_value_psf}×{build_sf:,}", -monthly_proptax, -monthly_proptax * 12, ""),
-        ("Insurance", "", -monthly_ins, -monthly_ins * 12, ""),
-        ("Repairs", f"{repairs_per_unit}/unit/mo", -monthly_repairs, -monthly_repairs * 12, ""),
-        ("Utilities / Misc", "", -monthly_utils, -monthly_utils * 12, ""),
-        ("Leasing Reserve", "", -monthly_leasing, -monthly_leasing * 12, ""),
-        ("Total OPEX", "", -monthly_total_opex, -monthly_total_opex * 12, ""),
-        ("NOI", "EGI - OPEX", monthly_noi, monthly_noi * 12, ""),
-        ("Permanent Debt Service", f"{perm_mortgage_rate}%, {amortization_years}yr amort", -monthly_debt_service, -monthly_debt_service * 12, ""),
-        ("Monthly Cash Flow After Debt", "", monthly_cf_after_debt, monthly_cf_after_debt * 12, ""),
-    ]
-    for label, basis, mo, ann, note in opex_items:
-        _data_row(ws1, r, [label, basis, mo, ann, note],
-                  fills=[None, None, green_fill, green_fill, None],
-                  fmts=[None, None, dollar_fmt, dollar_fmt, None])
-        r += 1
-
-    # ── Section 4: Profit/Loss After Hold ──
-    r += 1
-    ws1.cell(row=r, column=1, value="PROFIT / LOSS AFTER HOLD").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws1, r, ["Line Item", "Formula / Basis", "Amount", "Notes"])
-    r += 1
-
-    profit_items = [
-        ("Land Equity", "Purchase price", purchase_price, "Cash in"),
-        ("Construction Interest", "During build", construction_interest, "Cash in"),
-        ("Loan Fees", "", loan_fees, "Cash in"),
-        ("Cumulative Rental CF", f"{hold_months} months", cumulative_cf, "Pos = cash returned"),
-        ("Additional Equity for Negative CF", "max(0, -cumCF)", additional_equity_needed, "Cash in if CF negative"),
-        ("Total Equity Invested", "Sum of cash in", total_equity_invested, ""),
-        ("", "", "", ""),
-        ("Final Sale Price", f"{exit_psf} × {build_sf:,} sf", user_revenue, ""),
-        ("Exit Costs", f"{exit_cost_pct:.1f}%", -exit_costs_user, ""),
-        ("Net Sale Before Debt", "", net_sale_before_debt, ""),
-        ("Loan Balance After Hold", f"{hold_months} mo amort", -loan_balance_after_hold, ""),
-        ("Net Sale After Debt", "", net_sale_after_debt, ""),
-        ("Positive Rental CF Returned", "", positive_rental_cf, ""),
-        ("Total Cash Returned", "", total_cash_returned, ""),
-        ("Profit / (Loss)", "Cash returned - equity", user_profit, ""),
-        ("Equity Multiple", "Cash returned / equity", equity_multiple, ""),
-    ]
-    for label, basis, amt, note in profit_items:
-        fill_c = None
-        fmt_c = dollar_fmt
-        if label == "Equity Multiple":
-            fmt_c = '0.00x'
-            fill_c = orange_fill
-        elif label == "Profit / (Loss)":
-            fill_c = orange_fill
-        elif label == "Total Equity Invested" or label == "Total Cash Returned":
-            fill_c = light_blue_fill
-        _data_row(ws1, r, [label, basis, amt, note],
-                  fills=[None, None, fill_c, None],
-                  fmts=[None, None, fmt_c, None])
-        r += 1
-
-    # ── Section 5: Hold Sweep — Build Cost vs Exit Price (Profit) ──
-    r += 1
-    ws1.cell(row=r, column=1, value="HOLD SWEEP — BUILD COST vs EXIT PRICE (Profit)").font = Font(bold=True, size=14)
-    r += 1
-
-    sweep_build_costs = [build_cost_psf - 25, build_cost_psf, build_cost_psf + 25, build_cost_psf + 50]
-    sweep_exit_prices = [exit_psf - 25, exit_psf, exit_psf + 25]
-
-    common_args = dict(
-        purchase_price=purchase_price, build_sf=build_sf, exit_cost_pct=exit_cost_pct,
-        hard_contingency_pct=hard_contingency_pct, soft_cost_pct=soft_cost_pct,
-        soft_contingency=soft_contingency, ltv=ltv, interest_rate=interest_rate,
-        draw_factor=draw_factor, loan_fee_pct=loan_fee_pct,
-        build_months=build_months, hold_months=hold_months, delay_months=delay_months,
-        perm_mortgage_rate=perm_mortgage_rate, amortization_years=amortization_years,
-        rent_per_unit=rent_per_unit, units=units, vacancy_pct=vacancy_pct,
-        mgmt_fee_pct=mgmt_fee_pct, prop_tax_rate=prop_tax_rate,
-        taxable_value_psf=taxable_value_psf, insurance_monthly=insurance_monthly,
-        repairs_per_unit=repairs_per_unit, common_utilities=common_utilities,
-        leasing_reserve=leasing_reserve,
-        const_tax_rate=const_tax_rate, const_insurance_annual=const_insurance_annual,
-        const_utilities_mo=const_utilities, const_misc_mo=const_misc,
-        carry_buffer_pct=carry_buffer_pct,
-        staging_base=staging_base, staging_per_unit=staging_per_unit,
-        marketing_base=marketing_base, marketing_per_unit=marketing_per_unit,
-        warranty_per_unit=warranty_per_unit, sale_hold_months=sale_hold_months,
-    )
-
-    # Header row
-    ws1.cell(row=r, column=1, value="Build Cost \\ Exit $/sf").font = bold
-    ws1.cell(row=r, column=1).fill = header_fill
-    ws1.cell(row=r, column=1).font = bold_white
-    for j, ep in enumerate(sweep_exit_prices, 2):
-        cell = ws1.cell(row=r, column=j, value=f"${ep}/sf")
-        cell.font = bold_white
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center')
-    r += 1
-
-    for bc in sweep_build_costs:
-        ws1.cell(row=r, column=1, value=f"${bc}/sf").font = bold
-        for j, ep in enumerate(sweep_exit_prices, 2):
-            profit_val, _ = _compute_hold_profit(build_cost=bc, exit_price=ep, **common_args)
-            cell = ws1.cell(row=r, column=j, value=profit_val)
-            cell.number_format = dollar_fmt
-            cell.fill = green_fill if profit_val >= 0 else PatternFill("solid", fgColor="FFC7CE")
-            cell.border = thin_border
-        r += 1
-
-    # ── Section 6: Equity Multiple Sweep ──
-    r += 1
-    ws1.cell(row=r, column=1, value="EQUITY MULTIPLE SWEEP").font = Font(bold=True, size=14)
-    r += 1
-
-    ws1.cell(row=r, column=1, value="Build Cost \\ Exit $/sf").font = bold_white
-    ws1.cell(row=r, column=1).fill = header_fill
-    for j, ep in enumerate(sweep_exit_prices, 2):
-        cell = ws1.cell(row=r, column=j, value=f"${ep}/sf")
-        cell.font = bold_white
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center')
-    r += 1
-
-    for bc in sweep_build_costs:
-        ws1.cell(row=r, column=1, value=f"${bc}/sf").font = bold
-        for j, ep in enumerate(sweep_exit_prices, 2):
-            _, em_val = _compute_hold_profit(build_cost=bc, exit_price=ep, **common_args)
-            cell = ws1.cell(row=r, column=j, value=em_val)
-            cell.number_format = '0.00x'
-            cell.fill = orange_fill if em_val >= 1 else PatternFill("solid", fgColor="FFC7CE")
-            cell.border = thin_border
-        r += 1
-
-    # ═══════════════════════════════════════════
-    # SHEET 2: Detailed Analysis
-    # ═══════════════════════════════════════════
-    ws2 = wb.create_sheet("Detailed Analysis")
-    ws2.sheet_properties.tabColor = "70AD47"
-
-    ws2.column_dimensions['A'].width = 28
-    for col_letter in ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
-        ws2.column_dimensions[col_letter].width = 16
-    ws2.column_dimensions['K'].width = 25
-    ws2.column_dimensions['L'].width = 16
-
-    r = 1
-
-    # ── Section 1: Pro Forma Summary ──
-    ws2.cell(row=r, column=1, value="PRO FORMA SUMMARY").font = Font(bold=True, size=14)
-    r += 1
-
-    cost_levels = [build_cost_psf - 25, build_cost_psf, build_cost_psf + 25, build_cost_psf + 50]
-    _header_row(ws2, r, ["Line Item"] + [f"${cl}/sf" for cl in cost_levels] + ["", "Model Assumptions", "Value"])
-    r += 1
-
-    model_assumptions_right = [
-        ("Units", units),
-        ("Sq Ft / Unit", per_unit_sf),
-        ("Total Sq Ft", build_sf),
-        ("Land Cost", purchase_price),
-        ("Exit $/sf", exit_psf),
-        ("Build Duration (mo)", build_months),
-        ("Hold Period (mo)", hold_months),
-        ("Hard Contingency %", hard_contingency_pct / 100),
-        ("Soft Cost %", soft_cost_pct / 100),
-        ("LTV %", ltv / 100),
-        ("Construction Rate %", interest_rate / 100),
-        ("Perm Mortgage %", perm_mortgage_rate / 100),
-    ]
-
-    def _proforma_row_at_cost(bc):
-        hc_l = bc * build_sf
-        hcont_l = hc_l * (hard_contingency_pct / 100)
-        sc_l = hc_l * (soft_cost_pct / 100)
-        tdc_l = hc_l + hcont_l + sc_l + soft_contingency
-        tpc_l = purchase_price + tdc_l
-        la_l = tdc_l * (ltv / 100)
-        lf_l = la_l * (loan_fee_pct / 100)
-        # Carry (matching main model: loan interest on land+dev)
-        cm = build_months + delay_months
-        ci_l = (purchase_price + tdc_l) * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * cm / 12
-        ct_l = (purchase_price + 0.5 * tdc_l) * (const_tax_rate / 100) * cm / 12
-        cins_l = const_insurance_annual * cm / 12
-        cutil_l = const_utilities * cm
-        cmisc_l = const_misc * cm
-        csub_l = ci_l + ct_l + cins_l + cutil_l + cmisc_l
-        cbuf_l = csub_l * (carry_buffer_pct / 100)
-        tcarry_l = csub_l + cbuf_l
-        # Sales (matching main model)
-        rev_l = exit_psf * build_sf
-        var_sales_l = rev_l * (exit_cost_pct / 100)
-        stg_l = staging_base + staging_per_unit * units
-        mkt_l = marketing_base + marketing_per_unit * units
-        war_l = warranty_per_unit * units
-        hds_l = tcarry_l / max(cm, 1) * sale_hold_months
-        tsc_l = var_sales_l + stg_l + mkt_l + war_l + hds_l
-        total_l = tpc_l + lf_l + tcarry_l + tsc_l
-        profit_l = rev_l - total_l + (net_rental_income if hold_months > 0 else 0)
-        return {
-            "Land": purchase_price,
-            "Hard Cost": hc_l,
-            f"Hard Cost Contingency ({hard_contingency_pct}%)": hcont_l,
-            "Soft + Arch": sc_l + soft_contingency,
-            "Soft Contingency": soft_contingency,
-            "Carry": tcarry_l,
-            "Sales Cost": tsc_l,
-            "Total Cost": total_l,
-            "Exit Value": rev_l,
-            "Profit": profit_l,
-        }
-
-    proforma_rows = list(_proforma_row_at_cost(cost_levels[0]).keys())
-    proforma_data = [_proforma_row_at_cost(cl) for cl in cost_levels]
-
-    for i, row_label in enumerate(proforma_rows):
-        vals = [row_label] + [proforma_data[j][row_label] for j in range(4)]
-        fill_r = orange_fill if row_label == "Profit" else (light_blue_fill if row_label == "Total Cost" else None)
-        fmts_r = [None] + [dollar_fmt] * 4
-
-        # Add model assumptions on the right
-        k_val = ""
-        l_val = ""
-        if i < len(model_assumptions_right):
-            k_val, l_val = model_assumptions_right[i]
-        vals += ["", k_val, l_val]
-        k_fmt = None
-        if isinstance(l_val, float) and l_val < 1:
-            k_fmt = pct_fmt
-        elif isinstance(l_val, (int, float)) and l_val >= 100:
-            k_fmt = dollar_fmt
-        fmts_r += [None, None, k_fmt]
-
-        fills_r = [None] + [fill_r] * 4 + [None, None, yellow_fill if l_val != "" else None]
-        _data_row(ws2, r, vals, fills=fills_r, fmts=fmts_r)
-        r += 1
-
-    # ── Section 2: Sales Cost Breakdown ──
-    r += 1
-    ws2.cell(row=r, column=1, value="SALES COST BREAKDOWN").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws2, r, ["Category", "Rate", "Amount"])
-    r += 1
-
-    rev = exit_psf * build_sf
-    sales_items = [
-        ("Realtor / Agent", broker_fee_pct / 100, rev * broker_fee_pct / 100),
-        ("Title + Closing", title_closing_pct / 100, rev * title_closing_pct / 100),
-        ("Seller Concessions", seller_concessions_pct / 100, rev * seller_concessions_pct / 100),
-        ("Total", exit_cost_pct / 100, exit_costs_user),
-    ]
-    for label, rate, amt in sales_items:
-        fill_r = light_blue_fill if label == "Total" else None
-        _data_row(ws2, r, [label, rate, amt],
-                  fills=[fill_r, fill_r, fill_r],
-                  fmts=[None, pct_fmt, dollar_fmt])
-        r += 1
-
-    # ── Section 3: Soft Cost Breakdown ──
-    r += 1
-    ws2.cell(row=r, column=1, value="SOFT COST BREAKDOWN").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws2, r, ["Category", "Rate"] + [f"${cl}/sf" for cl in cost_levels])
-    r += 1
-
-    soft_categories = [
-        ("Architecture & Design", arch_pct),
-        ("Engineering (struct/MEP)", eng_pct),
-        ("Permits & Impact Fees", permit_fee_pct),
-        ("Surveys & Geotech", survey_pct),
-        ("Builder's Risk Insurance", insurance_dev_pct),
-        ("Other Soft Costs", other_soft_pct),
-        ("Total Soft %", soft_cost_pct),
-    ]
-    for label, pct_val in soft_categories:
-        hc_vals = [pct_val / 100] + [(cl * build_sf) * pct_val / 100 for cl in cost_levels]
-        fill_r = light_blue_fill if "Total" in label else None
-        _data_row(ws2, r, [label] + hc_vals,
-                  fills=[fill_r, fill_r] + [fill_r] * 4,
-                  fmts=[None, pct_fmt] + [dollar_fmt] * 4)
-        r += 1
-
-    # ── Section 4: Carrying Cost Breakdown ──
-    r += 1
-    ws2.cell(row=r, column=1, value="CARRYING COST BREAKDOWN").font = Font(bold=True, size=14)
-    r += 1
-    _header_row(ws2, r, ["Category", "Amount", "Notes"])
-    r += 1
-
-    carry_items = [
-        ("Loan Interest (Construction)", construction_interest, f"{interest_rate}% × {draw_factor}% draw"),
-        ("Loan Fees", loan_fees, f"{loan_fee_pct}% of loan"),
-        ("Hold Interest (Perm Debt Service)", hold_interest, f"{hold_months} months"),
-        ("Property Taxes (Hold)", prop_tax, f"{prop_tax_rate}%"),
-        ("Insurance (Hold)", insurance, f"{hold_months} months"),
-        ("Utilities / Misc (Hold)", misc, ""),
-        ("Total Carry", construction_interest + loan_fees + hold_interest + prop_tax + insurance + misc, ""),
-    ]
-    for label, amt, note in carry_items:
-        fill_r = light_blue_fill if "Total" in label else None
-        _data_row(ws2, r, [label, amt, note],
-                  fills=[fill_r, fill_r, fill_r],
-                  fmts=[None, dollar_fmt, None])
-        r += 1
-
-    # ── Section 5: Cost vs Price Profit Matrix ──
-    r += 1
-    ws2.cell(row=r, column=1, value="COST vs PRICE PROFIT MATRIX").font = Font(bold=True, size=14)
-    r += 1
-
-    ws2.cell(row=r, column=1, value="Build Cost \\ Exit $/sf").font = bold_white
-    ws2.cell(row=r, column=1).fill = header_fill
-    for j, ep in enumerate(sweep_exit_prices, 2):
-        cell = ws2.cell(row=r, column=j, value=f"${ep}/sf")
-        cell.font = bold_white
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center')
-    r += 1
-
-    for bc in sweep_build_costs:
-        ws2.cell(row=r, column=1, value=f"${bc}/sf").font = bold
-        for j, ep in enumerate(sweep_exit_prices, 2):
-            profit_val, _ = _compute_hold_profit(build_cost=bc, exit_price=ep, **common_args)
-            cell = ws2.cell(row=r, column=j, value=profit_val)
-            cell.number_format = dollar_fmt
-            cell.fill = green_fill if profit_val >= 0 else PatternFill("solid", fgColor="FFC7CE")
-            cell.border = thin_border
-        r += 1
-
-    # ── Section 6: Timeline Sensitivity ──
-    r += 1
-    ws2.cell(row=r, column=1, value="TIMELINE SENSITIVITY — Profit by Build Duration").font = Font(bold=True, size=14)
-    r += 1
-
-    durations = list(range(9, 16))
-    ws2.cell(row=r, column=1, value="Duration (mo) \\ Build Cost").font = bold_white
-    ws2.cell(row=r, column=1).fill = header_fill
-    for j, bc in enumerate(cost_levels, 2):
-        cell = ws2.cell(row=r, column=j, value=f"${bc}/sf")
-        cell.font = bold_white
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center')
-    r += 1
-
-    for dur in durations:
-        ws2.cell(row=r, column=1, value=f"{dur} months").font = bold
-        for j, bc in enumerate(cost_levels, 2):
-            profit_val, _ = _compute_hold_profit(
-                build_cost=bc, exit_price=exit_psf,
-                purchase_price=purchase_price, build_sf=build_sf,
-                exit_cost_pct=exit_cost_pct,
-                hard_contingency_pct=hard_contingency_pct,
-                soft_cost_pct=soft_cost_pct, soft_contingency=soft_contingency,
-                ltv=ltv, interest_rate=interest_rate, draw_factor=draw_factor,
-                loan_fee_pct=loan_fee_pct,
-                build_months=dur, hold_months=hold_months, delay_months=delay_months,
-                perm_mortgage_rate=perm_mortgage_rate, amortization_years=amortization_years,
-                rent_per_unit=rent_per_unit, units=units, vacancy_pct=vacancy_pct,
-                mgmt_fee_pct=mgmt_fee_pct, prop_tax_rate=prop_tax_rate,
-                taxable_value_psf=taxable_value_psf, insurance_monthly=insurance_monthly,
-                repairs_per_unit=repairs_per_unit, common_utilities=common_utilities,
-                leasing_reserve=leasing_reserve,
-            )
-            cell = ws2.cell(row=r, column=j, value=profit_val)
-            cell.number_format = dollar_fmt
-            cell.fill = green_fill if profit_val >= 0 else PatternFill("solid", fgColor="FFC7CE")
-            cell.border = thin_border
-        r += 1
-
-    # Save to bytes
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
+/* Better table styling */
+th {
+    background-color: #1F4E79 !important;
+    color: white !important;
+    padding: 8px 12px !important;
+}
+td {
+    padding: 6px 12px !important;
+    border-bottom: 1px solid #e9ecef !important;
+}
+tr:hover td {
+    background-color: #f1f3f5 !important;
+}
+
+/* Sidebar cleanup */
+section[data-testid="stSidebar"] {
+    background-color: #fafbfc;
+}
+
+/* Breathing room */
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1792,142 +91,136 @@ st.caption("Real market data + financial modeling → **Should you buy or not?**
 with st.sidebar:
     st.header("📥 Deal Inputs")
 
+    expand_all = st.toggle("Expand all sections", value=False)
+
     with st.form("deal_form"):
         st.subheader("🏠 Property")
-        address = st.text_input("Property Address", value=st.session_state.get('address', ''),
+        address = st.text_input("Property Address", value=st.session_state.get('address', '1309 Perez St'),
                                placeholder="e.g., 2613 Nottingham Ln",
                                help="Street address of the property you're analyzing")
-        zip_code = st.text_input("ZIP Code", value=st.session_state.get('zip_code', ''),
+        zip_code = st.text_input("ZIP Code", value=st.session_state.get('zip_code', '78721'),
                                  placeholder="e.g., 78704",
                                  help="Used to pull comps, permits, and zoning data")
 
-        st.divider()
-        st.subheader("💵 Deal Numbers")
-        purchase_price = st.number_input("Purchase Price ($)", min_value=0, value=450000, step=25000,
-                                         help="Land acquisition cost or total purchase price")
-        build_sf = st.number_input("Total Build Size (sf)", min_value=0, value=3000, step=500,
-                                   help="Total finished square footage across all units")
-        units = st.number_input("Number of Units", min_value=1, value=2, step=1,
-                                help="Number of residential units (e.g., 2 for a duplex)")
-        build_cost_psf = st.number_input("Build Cost ($/sf)", min_value=0, value=250, step=25,
-                                         help="Hard construction cost per square foot (labor + materials)")
-        exit_psf = st.number_input("Exit Price ($/sf)", min_value=0, value=575, step=10,
-                                   help="Your target sale price per square foot")
+        submitted = st.form_submit_button("🔍 Submit", use_container_width=True, type="primary")
 
-        st.divider()
-        st.subheader("💵 Cost Details")
-        hard_contingency_pct = st.number_input("Hard Cost Contingency (%)", min_value=0.0, max_value=15.0, value=6.0, step=0.5,
-                                         help="Buffer for unexpected construction cost overruns (typically 5-10%)")
-        split_soft = st.toggle("Split Soft Cost Categories", value=False,
-                               help="Break down soft costs into individual line items instead of one percentage")
-        if split_soft:
-            arch_pct = st.number_input("Architecture & Design (%)", min_value=0.0, max_value=10.0, value=3.0, step=0.5,
-                                       help="Architect fees — as % of hard cost")
-            eng_pct = st.number_input("Engineering (structural/MEP) (%)", min_value=0.0, max_value=10.0, value=2.0, step=0.5,
-                                      help="Structural, mechanical, electrical, plumbing engineering — as % of hard cost")
-            permit_fee_pct = st.number_input("Permits & Impact Fees (%)", min_value=0.0, max_value=10.0, value=2.5, step=0.5,
-                                             help="City permits, impact fees, utility connections — as % of hard cost")
-            survey_pct = st.number_input("Surveys & Geotech (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.5,
-                                         help="Land survey, soil testing, environmental — as % of hard cost")
-            insurance_dev_pct = st.number_input("Builder's Risk Insurance (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.5,
-                                                help="Builder's risk / liability during construction — as % of hard cost")
-            other_soft_pct = st.number_input("Other Soft Costs (%)", min_value=0.0, max_value=10.0, value=0.9, step=0.1,
-                                             help="Legal, accounting, misc — as % of hard cost")
-            soft_cost_pct = arch_pct + eng_pct + permit_fee_pct + survey_pct + insurance_dev_pct + other_soft_pct
-            st.caption(f"**Total Soft: {soft_cost_pct:.1f}%**")
-        else:
-            soft_cost_pct = st.number_input("Soft Costs (arch/eng/permits) (%)", min_value=0.0, max_value=30.0, value=10.4, step=0.5,
-                                            help="Architecture, engineering, permits, surveys — as % of hard cost")
-            arch_pct = eng_pct = permit_fee_pct = survey_pct = insurance_dev_pct = other_soft_pct = 0.0
-        soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=30000, step=5000,
-                                           help="Fixed buffer for unexpected soft cost items")
+        with st.expander("💵 Deal Numbers", expanded=expand_all):
+            purchase_price = st.number_input("Purchase Price ($)", min_value=0, value=450000, step=25000,
+                                             help="Land acquisition cost or total purchase price")
+            build_sf = st.number_input("Total Build Size (sf)", min_value=0, value=3000, step=500,
+                                       help="Total finished square footage across all units")
+            units = st.number_input("Number of Units", min_value=1, value=2, step=1,
+                                    help="Number of residential units (e.g., 2 for a duplex)")
+            build_cost_psf = st.number_input("Build Cost ($/sf)", min_value=0, value=250, step=25,
+                                             help="Hard construction cost per square foot (labor + materials)")
+            exit_psf = st.number_input("Exit Price ($/sf)", min_value=0, value=575, step=10,
+                                       help="Your target sale price per square foot")
 
-        st.divider()
-        st.subheader("💰 Construction Financing")
-        ltv = st.number_input("Loan to Cost (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0,
-                        help="% of non-land development cost funded by debt")
-        interest_rate = st.number_input("Construction Interest Rate (%)", min_value=3.0, max_value=14.0, value=8.0, step=0.25,
-                                  help="Annual interest rate on construction loan")
-        draw_factor = st.number_input("Draw Factor (%)", min_value=40.0, max_value=80.0, value=62.5, step=0.5,
-                                help="Avg % of loan funded during construction")
-        loan_fee_pct = st.number_input("Construction Loan Fees (%)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
-                                 help="Origination / lender fees on construction debt")
+        with st.expander("💵 Cost Details", expanded=expand_all):
+            hard_contingency_pct = st.number_input("Hard Cost Contingency (%)", min_value=0.0, max_value=15.0, value=6.0, step=0.5,
+                                             help="Buffer for unexpected construction cost overruns (typically 5-10%)")
+            split_soft = st.toggle("Split Soft Cost Categories", value=False,
+                                   help="Break down soft costs into individual line items instead of one percentage")
+            if split_soft:
+                arch_pct = st.number_input("Architecture & Design (%)", min_value=0.0, max_value=10.0, value=3.0, step=0.5,
+                                           help="Architect fees — as % of hard cost")
+                eng_pct = st.number_input("Engineering (structural/MEP) (%)", min_value=0.0, max_value=10.0, value=2.0, step=0.5,
+                                          help="Structural, mechanical, electrical, plumbing engineering — as % of hard cost")
+                permit_fee_pct = st.number_input("Permits & Impact Fees (%)", min_value=0.0, max_value=10.0, value=2.5, step=0.5,
+                                                 help="City permits, impact fees, utility connections — as % of hard cost")
+                survey_pct = st.number_input("Surveys & Geotech (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.5,
+                                             help="Land survey, soil testing, environmental — as % of hard cost")
+                insurance_dev_pct = st.number_input("Builder's Risk Insurance (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.5,
+                                                    help="Builder's risk / liability during construction — as % of hard cost")
+                other_soft_pct = st.number_input("Other Soft Costs (%)", min_value=0.0, max_value=10.0, value=0.9, step=0.1,
+                                                 help="Legal, accounting, misc — as % of hard cost")
+                soft_cost_pct = arch_pct + eng_pct + permit_fee_pct + survey_pct + insurance_dev_pct + other_soft_pct
+                st.caption(f"**Total Soft: {soft_cost_pct:.1f}%**")
+            else:
+                soft_cost_pct = st.number_input("Soft Costs (arch/eng/permits) (%)", min_value=0.0, max_value=30.0, value=10.4, step=0.5,
+                                                help="Architecture, engineering, permits, surveys — as % of hard cost")
+                arch_pct = eng_pct = permit_fee_pct = survey_pct = insurance_dev_pct = other_soft_pct = 0.0
+            soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=30000, step=5000,
+                                               help="Fixed buffer for unexpected soft cost items")
 
-        st.divider()
-        st.subheader("📅 Timeline")
-        build_months = st.number_input("Build Duration (months)", min_value=6, max_value=24, value=12, step=1,
-                                help="Estimated construction timeline from permit to CO")
-        hold_months = st.number_input("Hold Period After Build (months)", min_value=0, max_value=36, value=24, step=1,
-                                help="0 = flip immediately, 24 = rent then sell")
-        delay_months = st.number_input("Expected Delays (months)", min_value=0, max_value=12, value=0, step=1,
-                                help="Buffer for permitting delays, weather, supply issues")
+        with st.expander("💰 Construction Financing", expanded=expand_all):
+            ltv = st.number_input("Loan to Cost (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0,
+                            help="% of non-land development cost funded by debt")
+            interest_rate = st.number_input("Construction Interest Rate (%)", min_value=3.0, max_value=14.0, value=8.0, step=0.25,
+                                      help="Annual interest rate on construction loan")
+            draw_factor = st.number_input("Draw Factor (%)", min_value=40.0, max_value=80.0, value=62.5, step=0.5,
+                                    help="Avg % of loan funded during construction")
+            loan_fee_pct = st.number_input("Construction Loan Fees (%)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
+                                     help="Origination / lender fees on construction debt")
 
-        st.divider()
-        st.subheader("🏗️ Construction Carry Costs")
-        const_tax_rate = st.number_input("Construction Property Tax (%)", min_value=0.0, max_value=4.0, value=2.0, step=0.1,
-                                    help="Annual property tax rate during construction period")
-        const_insurance_annual = st.number_input("Construction Insurance ($/yr)", min_value=0, value=6750, step=250,
-                                                  help="Builder's risk + liability insurance per year during construction")
-        const_utilities = st.number_input("Construction Utilities ($/mo)", min_value=0, value=450, step=50,
-                                           help="Water, electric, temp power during construction")
-        const_misc = st.number_input("Construction Misc ($/mo)", min_value=0, value=325, step=25,
-                                      help="Dumpster, portable toilet, misc during construction")
-        carry_buffer_pct = st.number_input("Carry Cost Buffer (%)", min_value=0.0, max_value=25.0, value=12.5, step=0.5,
-                                      help="Buffer on top of all carry costs for unexpected overruns")
+        with st.expander("📅 Timeline", expanded=expand_all):
+            build_months = st.number_input("Build Duration (months)", min_value=6, max_value=24, value=12, step=1,
+                                    help="Estimated construction timeline from permit to CO")
+            hold_months = st.number_input("Hold Period After Build (months)", min_value=0, max_value=36, value=24, step=1,
+                                    help="0 = flip immediately, 24 = rent then sell")
+            delay_months = st.number_input("Expected Delays (months)", min_value=0, max_value=12, value=0, step=1,
+                                    help="Buffer for permitting delays, weather, supply issues")
 
-        st.divider()
-        st.subheader("💸 Sale / Exit Costs")
-        broker_fee_pct = st.number_input("Broker / Agent Fee (%)", min_value=0.0, max_value=6.0, value=3.0, step=0.25,
-                                   help="Listing + buyer agent commission")
-        title_closing_pct = st.number_input("Title + Closing Costs (%)", min_value=0.0, max_value=3.0, value=1.3, step=0.1,
-                                      help="Title insurance, escrow, recording fees")
-        seller_concessions_pct = st.number_input("Seller Concessions (%)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
-                                           help="Buyer credits, repairs, warranty")
-        exit_cost_pct = broker_fee_pct + title_closing_pct + seller_concessions_pct
-        sale_hold_months = st.number_input('Sale Hold Period (months)', min_value=0.0, max_value=6.0, value=1.5, step=0.5,
-                                            help='Months property sits on market before closing')
-        staging_base = st.number_input('Staging Base ($)', min_value=0, value=1500, step=500,
-                                        help='Base staging cost (fixed)')
-        staging_per_unit = st.number_input('Staging Per Unit ($)', min_value=0, value=3500, step=500,
-                                            help='Additional staging cost per unit')
-        marketing_base = st.number_input('Marketing Base ($)', min_value=0, value=2000, step=500,
-                                          help='Photography, signage, MLS listing fees')
-        marketing_per_unit = st.number_input('Marketing Per Unit ($)', min_value=0, value=1500, step=500,
-                                              help='Additional marketing cost per unit')
-        warranty_per_unit = st.number_input('Warranty Per Unit ($)', min_value=0, value=1750, step=250,
-                                             help='Home warranty cost per unit')
+        with st.expander("🏗️ Construction Carry", expanded=expand_all):
+            const_tax_rate = st.number_input("Construction Property Tax (%)", min_value=0.0, max_value=4.0, value=2.0, step=0.1,
+                                        help="Annual property tax rate during construction period")
+            const_insurance_annual = st.number_input("Construction Insurance ($/yr)", min_value=0, value=6750, step=250,
+                                                      help="Builder's risk + liability insurance per year during construction")
+            const_utilities = st.number_input("Construction Utilities ($/mo)", min_value=0, value=450, step=50,
+                                               help="Water, electric, temp power during construction")
+            const_misc = st.number_input("Construction Misc ($/mo)", min_value=0, value=325, step=25,
+                                          help="Dumpster, portable toilet, misc during construction")
+            carry_buffer_pct = st.number_input("Carry Cost Buffer (%)", min_value=0.0, max_value=25.0, value=12.5, step=0.5,
+                                          help="Buffer on top of all carry costs for unexpected overruns")
 
-        st.divider()
-        st.subheader("📉 Market Risk")
-        price_decline = st.number_input("Annual Price Change (%)", min_value=-15.0, max_value=10.0, value=0.0, step=0.5,
-                                  help="Expected annual change in market prices (negative = decline)")
+        with st.expander("💸 Sale / Exit Costs", expanded=expand_all):
+            broker_fee_pct = st.number_input("Broker / Agent Fee (%)", min_value=0.0, max_value=6.0, value=3.0, step=0.25,
+                                       help="Listing + buyer agent commission")
+            title_closing_pct = st.number_input("Title + Closing Costs (%)", min_value=0.0, max_value=3.0, value=1.3, step=0.1,
+                                          help="Title insurance, escrow, recording fees")
+            seller_concessions_pct = st.number_input("Seller Concessions (%)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
+                                               help="Buyer credits, repairs, warranty")
+            exit_cost_pct = broker_fee_pct + title_closing_pct + seller_concessions_pct
+            sale_hold_months = st.number_input('Sale Hold Period (months)', min_value=0.0, max_value=6.0, value=1.5, step=0.5,
+                                                help='Months property sits on market before closing')
+            staging_base = st.number_input('Staging Base ($)', min_value=0, value=1500, step=500,
+                                            help='Base staging cost (fixed)')
+            staging_per_unit = st.number_input('Staging Per Unit ($)', min_value=0, value=3500, step=500,
+                                                help='Additional staging cost per unit')
+            marketing_base = st.number_input('Marketing Base ($)', min_value=0, value=2000, step=500,
+                                              help='Photography, signage, MLS listing fees')
+            marketing_per_unit = st.number_input('Marketing Per Unit ($)', min_value=0, value=1500, step=500,
+                                                  help='Additional marketing cost per unit')
+            warranty_per_unit = st.number_input('Warranty Per Unit ($)', min_value=0, value=1750, step=250,
+                                                 help='Home warranty cost per unit')
 
-        st.divider()
-        st.subheader("🏘️ Rental (Hold Strategy)")
-        rent_per_unit = st.number_input("Monthly Rent / Unit ($)", min_value=0, value=3950, step=100,
-                                      help="Expected monthly rent per unit after lease-up")
-        vacancy_pct = st.number_input("Vacancy / Credit Loss (%)", min_value=0.0, max_value=15.0, value=5.0, step=0.5,
-                                help="% of gross rent lost to vacancy and bad debt")
-        mgmt_fee_pct = st.number_input("Management Fee (%)", min_value=0.0, max_value=15.0, value=7.0, step=0.5,
-                                 help="Property management fee as % of effective rent")
-        perm_mortgage_rate = st.number_input("Permanent Mortgage Rate (%)", min_value=3.0, max_value=12.0, value=7.0, step=0.25,
-                                       help="Rate after construction loan converts to permanent")
-        amortization_years = st.number_input("Amortization (years)", min_value=15, max_value=30, value=30, step=5,
-                                            help="Loan payoff schedule length (longer = lower monthly payment)")
-        taxable_value_psf = st.number_input("Taxable Value ($/sf)", min_value=0, value=550, step=25,
-                                            help="Assessed value for property tax during hold")
-        prop_tax_rate = st.number_input("Property Tax Rate (%)", min_value=1.0, max_value=4.0, value=2.0, step=0.1,
-                                  help="Annual property tax rate (Austin is typically ~2%)")
-        insurance_monthly = st.number_input("Landlord Insurance ($/mo)", min_value=0, value=375, step=25,
-                                            help="Monthly hazard + liability insurance premium")
-        repairs_per_unit = st.number_input("Repairs Reserve ($/unit/mo)", min_value=0, value=150, step=25,
-                                           help="Monthly reserve per unit for maintenance and repairs")
-        common_utilities = st.number_input("Common Utilities / Misc ($/mo)", min_value=0, value=250, step=25,
-                                           help="Owner-paid utilities, landscaping, pest control, etc.")
-        leasing_reserve = st.number_input("Leasing / Turnover Reserve ($/mo)", min_value=0, value=250, step=25,
-                                          help="Reserve for tenant turnover, marketing, and lease-up costs")
+        with st.expander("📉 Market Risk", expanded=expand_all):
+            price_decline = st.number_input("Annual Price Change (%)", min_value=-15.0, max_value=10.0, value=0.0, step=0.5,
+                                      help="Expected annual change in market prices (negative = decline)")
 
-        submitted = st.form_submit_button("🔍 Analyze — Should I Buy?", use_container_width=True, type="primary")
+        with st.expander("🏘️ Rental (Hold Strategy)", expanded=expand_all):
+            rent_per_unit = st.number_input("Monthly Rent / Unit ($)", min_value=0, value=3950, step=100,
+                                          help="Expected monthly rent per unit after lease-up")
+            vacancy_pct = st.number_input("Vacancy / Credit Loss (%)", min_value=0.0, max_value=15.0, value=5.0, step=0.5,
+                                    help="% of gross rent lost to vacancy and bad debt")
+            mgmt_fee_pct = st.number_input("Management Fee (%)", min_value=0.0, max_value=15.0, value=7.0, step=0.5,
+                                     help="Property management fee as % of effective rent")
+            perm_mortgage_rate = st.number_input("Permanent Mortgage Rate (%)", min_value=3.0, max_value=12.0, value=7.0, step=0.25,
+                                           help="Rate after construction loan converts to permanent")
+            amortization_years = st.number_input("Amortization (years)", min_value=15, max_value=30, value=30, step=5,
+                                                help="Loan payoff schedule length (longer = lower monthly payment)")
+            taxable_value_psf = st.number_input("Taxable Value ($/sf)", min_value=0, value=550, step=25,
+                                                help="Assessed value for property tax during hold")
+            prop_tax_rate = st.number_input("Property Tax Rate (%)", min_value=1.0, max_value=4.0, value=2.0, step=0.1,
+                                      help="Annual property tax rate (Austin is typically ~2%)")
+            insurance_monthly = st.number_input("Landlord Insurance ($/mo)", min_value=0, value=375, step=25,
+                                                help="Monthly hazard + liability insurance premium")
+            repairs_per_unit = st.number_input("Repairs Reserve ($/unit/mo)", min_value=0, value=150, step=25,
+                                               help="Monthly reserve per unit for maintenance and repairs")
+            common_utilities = st.number_input("Common Utilities / Misc ($/mo)", min_value=0, value=250, step=25,
+                                               help="Owner-paid utilities, landscaping, pest control, etc.")
+            leasing_reserve = st.number_input("Leasing / Turnover Reserve ($/mo)", min_value=0, value=250, step=25,
+                                              help="Reserve for tenant turnover, marketing, and lease-up costs")
 
 
 # ── Main Content ──
@@ -2130,6 +423,59 @@ if show_analysis and result is not None:
     breakeven_psf = total_equity_invested / build_sf if build_sf > 0 else 0
 
     # ══════════════════════════════════════════════
+    # RE INDUSTRY METRICS (new — do not alter above calculations)
+    # ══════════════════════════════════════════════
+    # ARV = After Repair Value (same as user_revenue)
+    arv = user_revenue
+
+    # Rehab Costs = hard cost + hard contingency + soft costs + soft contingency
+    rehab_costs = total_dev_cost  # already calculated above
+
+    # MAO = Maximum Allowable Offer (70% Rule)
+    # MAO = ARV × 70% − Rehab Costs
+    mao = arv * 0.70 - rehab_costs
+    passes_70_rule = purchase_price <= mao
+
+    # LTV (Loan-to-Value) — different from LTC!
+    # LTC = loan / dev cost (what we use for construction financing)
+    # LTV = loan / ARV (what lenders look at for permanent financing)
+    ltv_ratio = (loan_amount / arv * 100) if arv > 0 else 0
+
+    # Cash-on-Cash Return (for hold scenarios)
+    if hold_months > 0 and total_equity_invested > 0:
+        annual_cf = monthly_cf_after_debt * 12
+        cash_on_cash = (annual_cf / total_equity_invested) * 100
+    else:
+        cash_on_cash = 0.0
+
+    # DOM (Days on Market) stats from comps
+    dom_values = []
+    for c in result.redfin_comps:
+        dom_raw = c.get("days_on_market", "")
+        if dom_raw and str(dom_raw).strip():
+            try:
+                dom_values.append(int(float(str(dom_raw).strip())))
+            except (ValueError, TypeError):
+                pass
+    if dom_values:
+        dom_median = sorted(dom_values)[len(dom_values) // 2]
+        dom_avg = round(sum(dom_values) / len(dom_values))
+    else:
+        dom_median = 0
+        dom_avg = 0
+
+    # Active listings DOM
+    active_dom_values = []
+    for c in getattr(result, 'active_comps', []) or []:
+        dom_raw = c.get("days_on_market", "")
+        if dom_raw and str(dom_raw).strip():
+            try:
+                active_dom_values.append(int(float(str(dom_raw).strip())))
+            except (ValueError, TypeError):
+                pass
+    active_dom_median = sorted(active_dom_values)[len(active_dom_values) // 2] if active_dom_values else 0
+
+    # ══════════════════════════════════════════════
     # STEP 3: Risk scoring (0-100, higher = more risk)
     # ══════════════════════════════════════════════
     risk_score = 0
@@ -2184,6 +530,31 @@ if show_analysis and result is not None:
     if breakeven_psf > median_psf and median_psf > 0 and not is_census_fallback:
         risk_score += 20
         risk_flags.append(("🔴", f"Break-even (\\${breakeven_psf:.0f}/sf) is **above** market median (\\${median_psf}/sf)"))
+
+    # ── RE Detection Flags ──
+    # High DOM on active listings suggests motivated sellers in area
+    if active_dom_median > 120:
+        risk_score += 10
+        risk_flags.append(("🟡", f"**Slow market** — active listings averaging {active_dom_median} DOM. Sellers may be motivated."))
+
+    # 70% Rule flag
+    if not passes_70_rule:
+        risk_score += 10
+        risk_flags.append(("🟡", f"**Fails 70% Rule** — Purchase (\\${purchase_price:,.0f}) exceeds MAO (\\${mao:,.0f}). Standard investor threshold not met."))
+    else:
+        risk_flags.append(("🟢", f"**Passes 70% Rule** — Purchase (\\${purchase_price:,.0f}) ≤ MAO (\\${mao:,.0f})"))
+
+    # LTV warning
+    if ltv_ratio > 80:
+        risk_flags.append(("🟡", f"**High LTV** ({ltv_ratio:.0f}%) — may be difficult to refinance or get permanent financing"))
+    elif ltv_ratio > 0:
+        risk_flags.append(("🟢", f"LTV {ltv_ratio:.0f}% — healthy leverage ratio"))
+
+    # Hard money / bridge loan detection
+    if interest_rate > 10:
+        risk_flags.append(("🟡", f"**Hard money rate** detected ({interest_rate}%) — high cost of capital"))
+    if build_months + delay_months + hold_months < 24 and interest_rate > 8:
+        risk_flags.append(("ℹ️", "Short-term + high rate = typical **bridge loan** structure"))
 
     # ══════════════════════════════════════════════
     # STEP 4: THE VERDICT
@@ -2253,12 +624,40 @@ if show_analysis and result is not None:
 
     # Key numbers
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("All-In Cost", f"${total_cost:,.0f}")
-    c2.metric("Your Exit Revenue", f"${user_revenue:,.0f}")
+    c1.metric("All-In Cost", f"${total_cost:,.0f}", help="Total Rehab + Land + Carry + Sales costs")
+    c2.metric("ARV (Exit Revenue)", f"${user_revenue:,.0f}", help="After Repair Value = Exit $/sf × Build SF")
     c3.metric("Your Profit", f"${user_profit:,.0f}")
     c4.metric(f"Profit @ Mkt \\${adjusted_exit:.0f}/sf", f"${market_profit:,.0f}")
-    c5.metric("Break-Even", f"${breakeven_psf:.0f}/sf")
+    c5.metric("Break-Even $/sf", f"${breakeven_psf:.0f}/sf", help="Minimum exit $/sf to recover all costs")
     c6.metric("Risk Score", f"{risk_score}/100")
+
+    # RE Industry Metrics row
+    st.markdown("---")
+    re_c1, re_c2, re_c3, re_c4, re_c5, re_c6 = st.columns(6)
+    re_c1.metric("ARV", f"${arv:,.0f}", help="After Repair Value")
+    re_c2.metric("MAO (70% Rule)", f"${mao:,.0f}",
+                 delta="✅ PASS" if passes_70_rule else "❌ FAIL",
+                 delta_color="normal" if passes_70_rule else "inverse",
+                 help="Max Allowable Offer = ARV × 70% − Rehab")
+    re_c3.metric("LTV", f"{ltv_ratio:.1f}%", help="Loan-to-Value = Loan ÷ ARV")
+    re_c4.metric("LTC", f"{ltv}%", help="Loan-to-Cost = Loan ÷ Dev Cost (your input)")
+    re_c5.metric("Equity Multiple", f"{equity_multiple:.2f}x", help="Cash returned ÷ Cash invested")
+    if hold_months > 0:
+        re_c6.metric("Cash-on-Cash", f"{cash_on_cash:.1f}%", help="Annual CF ÷ Equity Invested")
+    else:
+        re_c6.metric("Ann. Return", f"{annualized_return*100:.1f}%", help="Annualized IRR")
+
+    # DOM metrics (if data available)
+    if dom_median > 0 or active_dom_median > 0:
+        dom_c1, dom_c2, dom_c3 = st.columns(3)
+        if dom_median > 0:
+            dom_c1.metric("Sold DOM (Median)", f"{dom_median} days", help="Days on Market for sold comps")
+        if active_dom_median > 0:
+            dom_c2.metric("Active DOM (Median)", f"{active_dom_median} days", help="Days on Market for active listings")
+        if dom_median > 90:
+            dom_c3.warning("⚠️ High DOM — slow market")
+        elif dom_median > 0 and dom_median <= 30:
+            dom_c3.success("✅ Fast market (DOM < 30)")
 
     if median_psf > 0:
         if is_census_fallback:
@@ -2279,8 +678,8 @@ if show_analysis and result is not None:
     # ══════════════════════════════════════════════
     # TABS
     # ══════════════════════════════════════════════
-    tab_verdict, tab_scenarios, tab_comps, tab_active, tab_rental, tab_permits, tab_plot, tab_ai, tab_download = st.tabs([
-        "🚦 Risk Analysis", "📈 Scenarios & Sensitivity", "📊 Sold Comps", "🏠 Active Listings", "💰 Rental Comps", "🏗️ Permits", "📋 Plot Info", "🤖 AI Analysis", "📄 Download"
+    tab_verdict, tab_scenarios, tab_comps, tab_active, tab_rental, tab_permits, tab_plot, tab_ai, tab_download, tab_audit, tab_glossary = st.tabs([
+        "🚦 Risk Analysis", "📈 Scenarios & Sensitivity", "📊 Sold Comps", "🏠 Active Listings", "💰 Rental Comps", "🏗️ Permits", "📋 Plot Info", "🤖 AI Analysis", "📄 Download", "📐 Audit Trail", "📖 RE Glossary"
     ])
 
     # ── Risk Analysis Tab ──
@@ -2317,7 +716,7 @@ if show_analysis and result is not None:
             | **Non-Land Dev Cost** | **${total_dev_cost:,.0f}** |
             | Construction Debt ({ltv}% LTC) | ${loan_amount:,.0f} |
             | Carry Costs ({carry_months} mo) | ${total_carry:,.0f} |
-            | Loan Fees ({loan_fee_pct}%) | ${loan_fees:,.0f} |
+            | Points ({loan_fee_pct}%) | ${loan_fees:,.0f} |
             | Sales Costs | ${total_sales_cost:,.0f} |
             | **ALL-IN COST** | **${total_cost:,.0f}** |
             """)
@@ -2329,8 +728,8 @@ if show_analysis and result is not None:
                 | Item | Amount |
                 |------|--------|
                 | Land Equity | ${purchase_price:,.0f} |
-                | Carry Costs | ${total_carry:,.0f} |
-                | Loan Fees | ${loan_fees:,.0f} |
+                | Carrying Costs | ${total_carry:,.0f} |
+                | Points (Loan Fees) | ${loan_fees:,.0f} |
                 | Staging/Marketing/Warranty | ${staging_cost + marketing_cost + warranty_cost:,.0f} |
                 | Additional Equity (negative CF) | ${additional_equity_needed:,.0f} |
                 | **Total Equity Invested** | **${total_equity_invested:,.0f}** |
@@ -2698,6 +1097,7 @@ if show_analysis and result is not None:
                             "$/sf": c["psf"],
                             "Built": c.get("year_built", ""),
                             "Sold": c.get("sold_date", ""),
+                            "DOM": c.get("days_on_market", ""),
                             "Redfin": c.get("redfin_url", ""),
                             "Zillow": c.get("zillow_url", ""),
                         })
@@ -2732,6 +1132,7 @@ if show_analysis and result is not None:
                         "Distance": f"{c.get('distance_mi', 0):.1f} mi",
                         "Built": c.get("year_built", ""),
                         "Sold": c.get("sold_date", ""),
+                        "DOM": c.get("days_on_market", ""),
                         "Beds": c.get("beds", ""),
                         "Baths": c.get("baths", ""),
                         "Redfin": c.get("redfin_url", ""),
@@ -3328,6 +1729,276 @@ if show_analysis and result is not None:
           - Exit ≥ ${breakeven_psf:.0f}/sf
           - No major delays beyond {delay_months} months
         """)
+
+    # ── Audit Trail Tab ──
+    with tab_audit:
+        st.subheader("📐 Calculation Audit Trail")
+        st.caption("Every intermediate calculation with formulas — verify the math is correct.")
+
+        # ── Development Costs ──
+        st.markdown("#### 🏗️ Development Costs")
+        audit_dev = [
+            ("Hard Cost", f"{build_sf:,} sf × \\${build_cost_psf}/sf", hard_cost),
+            ("Hard Contingency", f"\\${hard_cost:,.0f} × {hard_contingency_pct}%", hard_contingency),
+            ("Soft Costs", f"\\${hard_cost:,.0f} × {soft_cost_pct:.1f}%", soft_costs),
+            ("Soft Contingency", "Fixed amount", soft_contingency),
+            ("**Total Dev Cost**", f"\\${hard_cost:,.0f} + \\${hard_contingency:,.0f} + \\${soft_costs:,.0f} + \\${soft_contingency:,.0f}", total_dev_cost),
+            ("**Total Project Cost**", f"\\${purchase_price:,.0f} (land) + \\${total_dev_cost:,.0f} (dev)", total_project_cost),
+        ]
+        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
+        for label, formula, value in audit_dev:
+            audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
+        st.markdown(audit_md)
+
+        # ── Financing ──
+        st.markdown("#### 💰 Financing")
+        audit_fin = [
+            ("Loan Amount (LTC)", f"\\${total_dev_cost:,.0f} × {ltv}%", loan_amount),
+            ("Equity Required", f"\\${total_project_cost:,.0f} − \\${loan_amount:,.0f}", equity),
+            ("Construction Interest", f"\\${loan_amount:,.0f} × {interest_rate}% × {draw_factor}% × {build_months + delay_months}/12 mo", construction_interest),
+            ("Loan Fees (Points)", f"\\${loan_amount:,.0f} × {loan_fee_pct}%", loan_fees),
+        ]
+        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
+        for label, formula, value in audit_fin:
+            audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
+        st.markdown(audit_md)
+
+        # ── Carry Costs ──
+        st.markdown("#### 📅 Construction Carry Costs")
+        audit_carry = [
+            ("Carry Period", f"{build_months} build + {delay_months} delay", carry_months),
+            ("Carry Loan Interest", f"(\\${purchase_price:,.0f} + \\${total_dev_cost:,.0f}) × {ltv}% × {interest_rate}% × {draw_factor}% × {carry_months}/12", carry_loan_interest),
+            ("Carry Taxes", f"(\\${purchase_price:,.0f} + 50% × \\${total_dev_cost:,.0f}) × {const_tax_rate}% × {carry_months}/12", carry_taxes),
+            ("Carry Insurance", f"\\${const_insurance_annual:,}/yr × {carry_months}/12", carry_insurance),
+            ("Carry Utilities", f"\\${const_utilities:,}/mo × {carry_months} mo", carry_utilities),
+            ("Carry Misc", f"\\${const_misc:,}/mo × {carry_months} mo", carry_misc),
+            ("Carry Subtotal", "Sum of above", carry_subtotal),
+            ("Carry Buffer", f"\\${carry_subtotal:,.0f} × {carry_buffer_pct}%", carry_buffer),
+            ("**Total Carry**", f"\\${carry_subtotal:,.0f} + \\${carry_buffer:,.0f}", total_carry),
+        ]
+        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
+        for label, formula, value in audit_carry:
+            if label == "Carry Period":
+                audit_md += f"| {label} | {formula} | {value} months |\n"
+            else:
+                audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
+        st.markdown(audit_md)
+
+        # ── Sales Costs ──
+        st.markdown("#### 💸 Sales / Exit Costs")
+        audit_sales = [
+            ("Exit Revenue (User)", f"{build_sf:,} sf × \\${exit_psf}/sf", user_revenue),
+            ("Broker + Title + Concessions", f"\\${user_revenue:,.0f} × {exit_cost_pct:.1f}%", variable_sales),
+            ("Staging", f"\\${staging_base:,} base + \\${staging_per_unit:,} × {units} units", staging_cost),
+            ("Marketing", f"\\${marketing_base:,} base + \\${marketing_per_unit:,} × {units} units", marketing_cost),
+            ("Warranty", f"\\${warranty_per_unit:,} × {units} units", warranty_cost),
+            ("Holding During Sale", f"\\${total_carry:,.0f} / {max(carry_months, 1)} mo × {sale_hold_months} mo", holding_during_sale),
+            ("**Total Sales Cost**", "Sum of above", total_sales_cost),
+        ]
+        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
+        for label, formula, value in audit_sales:
+            audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
+        st.markdown(audit_md)
+
+        # ── Hold Period (if applicable) ──
+        if hold_months > 0:
+            st.markdown("#### 🏘️ Hold Period (Rental)")
+            audit_hold = [
+                ("Gross Rent", f"\\${rent_per_unit:,}/unit × {units} units × {hold_months} mo", gross_rent),
+                ("Effective Rent", f"\\${gross_rent:,.0f} × (1 − {vacancy_pct}%)", effective_rent),
+                ("Management Fee", f"\\${effective_rent:,.0f} × {mgmt_fee_pct}%", mgmt_cost),
+                ("Property Tax (Hold)", f"{build_sf:,} sf × \\${taxable_value_psf}/sf × {prop_tax_rate}% × {hold_months}/12", prop_tax),
+                ("Insurance (Hold)", f"\\${insurance_monthly:,}/mo × {hold_months} mo", insurance),
+                ("Repairs Reserve", f"\\${repairs_per_unit:,}/unit/mo × {units} units × {hold_months} mo", repairs),
+                ("Utilities/Misc", f"\\${common_utilities:,}/mo × {hold_months} mo", misc),
+                ("Leasing Reserve", f"\\${leasing_reserve:,}/mo × {hold_months} mo", leasing),
+                ("Debt Service (Hold)", f"\\${monthly_debt_service:,.0f}/mo × {hold_months} mo", hold_interest),
+                ("**Total Hold Expenses**", "Sum of above", total_hold_expenses),
+                ("**Net Rental Income**", f"\\${effective_rent:,.0f} − \\${total_hold_expenses:,.0f}", net_rental_income),
+                ("Monthly NOI", f"(Eff. rent − OpEx) / {hold_months} mo", monthly_noi),
+                ("Monthly CF After Debt", f"\\${monthly_noi:,.0f} − \\${monthly_debt_service:,.0f}", monthly_cf_after_debt),
+                ("Loan Balance After Hold", "Amortized balance", loan_balance_after_hold),
+            ]
+            audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
+            for label, formula, value in audit_hold:
+                audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
+            st.markdown(audit_md)
+
+        # ── Final Profit ──
+        st.markdown("#### 🎯 Profit Summary")
+        audit_profit = [
+            ("Total Equity Invested", "Land + Fees + Carry + Sales + Add'l Equity", total_equity_invested),
+            ("User Revenue", f"{build_sf:,} sf × \\${exit_psf}/sf", user_revenue),
+            ("**User Profit**", f"Cash returned − Equity invested", user_profit),
+            ("Market Revenue", f"{build_sf:,} sf × \\${adjusted_exit:.0f}/sf (adj.)", adjusted_revenue),
+            ("**Market Profit**", f"Market cash returned − Equity invested", market_profit),
+            ("Break-Even $/sf", f"\\${total_equity_invested:,.0f} / {build_sf:,} sf", breakeven_psf),
+            ("Equity Multiple", f"Cash returned / Equity invested", equity_multiple),
+            ("Annualized Return", f"Over {timeline_years:.1f} years", annualized_return),
+        ]
+        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
+        for label, formula, value in audit_profit:
+            if label in ("Equity Multiple",):
+                audit_md += f"| {label} | {formula} | {value:.2f}x |\n"
+            elif label in ("Annualized Return",):
+                audit_md += f"| {label} | {formula} | {value * 100:.1f}% |\n"
+            elif label in ("Break-Even $/sf",):
+                audit_md += f"| {label} | {formula} | \\${value:.0f}/sf |\n"
+            else:
+                audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
+        st.markdown(audit_md)
+
+        # ── Benchmark Test ──
+        st.markdown("---")
+        st.subheader("🧪 Benchmark Test")
+        st.caption("Verify calculations against a known deal with expected results.")
+
+        if st.button("Run Benchmark — Karen Ave Test Deal", key="benchmark_btn"):
+            # Known Karen Ave deal parameters
+            bm = {}
+            bm['purchase_price'] = 450000
+            bm['build_sf'] = 3000
+            bm['units'] = 2
+            bm['build_cost_psf'] = 250
+            bm['exit_psf'] = 575
+
+            bm['hard_cost'] = bm['build_cost_psf'] * bm['build_sf']  # 750,000
+            bm['hard_contingency_pct'] = 6.0
+            bm['hard_contingency'] = bm['hard_cost'] * (bm['hard_contingency_pct'] / 100)  # 45,000
+            bm['soft_cost_pct'] = 10.4
+            bm['soft_costs'] = bm['hard_cost'] * (bm['soft_cost_pct'] / 100)  # 78,000
+            bm['soft_contingency'] = 30000
+            bm['total_dev_cost'] = bm['hard_cost'] + bm['hard_contingency'] + bm['soft_costs'] + bm['soft_contingency']  # 903,000
+            bm['total_project_cost'] = bm['purchase_price'] + bm['total_dev_cost']  # 1,353,000
+
+            bm['ltv'] = 100.0
+            bm['loan_amount'] = bm['total_dev_cost'] * (bm['ltv'] / 100)  # 903,000
+            bm['equity'] = bm['total_project_cost'] - bm['loan_amount']  # 450,000
+            bm['interest_rate'] = 8.0
+            bm['draw_factor'] = 62.5
+            bm['loan_fee_pct'] = 1.0
+            bm['loan_fees'] = bm['loan_amount'] * (bm['loan_fee_pct'] / 100)  # 9,030
+
+            bm['build_months'] = 12
+            bm['delay_months'] = 0
+            bm['carry_months'] = 12
+            bm['construction_interest'] = bm['loan_amount'] * (bm['interest_rate'] / 100) * (bm['draw_factor'] / 100) * bm['carry_months'] / 12  # 45,150
+
+            bm['user_revenue'] = bm['exit_psf'] * bm['build_sf']  # 1,725,000
+
+            # Expected values for verification
+            expected = {
+                "Hard Cost": (bm['hard_cost'], 750000),
+                "Hard Contingency": (bm['hard_contingency'], 45000),
+                "Soft Costs": (bm['soft_costs'], 78000),
+                "Total Dev Cost": (bm['total_dev_cost'], 903000),
+                "Total Project Cost": (bm['total_project_cost'], 1353000),
+                "Loan Amount": (bm['loan_amount'], 903000),
+                "Equity": (bm['equity'], 450000),
+                "Construction Interest": (bm['construction_interest'], 45150),
+                "Loan Fees": (bm['loan_fees'], 9030),
+                "Exit Revenue": (bm['user_revenue'], 1725000),
+            }
+
+            all_pass = True
+            results_md = "| Calculation | Computed | Expected | Status |\n|------------|---------|----------|--------|\n"
+            for label, (computed, exp) in expected.items():
+                passed = abs(computed - exp) < 1  # within $1 tolerance
+                status = "✅ PASS" if passed else "❌ FAIL"
+                if not passed:
+                    all_pass = False
+                results_md += f"| {label} | \\${computed:,.0f} | \\${exp:,.0f} | {status} |\n"
+
+            st.markdown(results_md)
+
+            if all_pass:
+                st.success("✅ All benchmark calculations match expected values — financial model is verified.")
+            else:
+                st.error("❌ Some calculations don't match. Review the formulas above.")
+
+    # ── RE Glossary Tab ──
+    with tab_glossary:
+        st.header("📖 Real Estate Investment Glossary")
+        st.markdown("Common RE investment terms and how they map to this tool's calculations.")
+
+        with st.expander("💰 Deal Analysis", expanded=True):
+            st.markdown("""
+**ARV (After Repair Value)** — The estimated market value of a property after all renovations are complete. In this tool: **Exit $/sf × Build SF** = your projected sale price.
+
+**MAO (Maximum Allowable Offer)** — The highest price an investor should pay for a property. Calculated using the 70% Rule. In this tool: shown in the RE Metrics row.
+
+**70% Rule** — A quick investor formula: **MAO = ARV × 70% − Rehab Costs**. If your purchase price is below MAO, the deal has built-in margin. This tool flags PASS/FAIL automatically.
+
+**Rehab Costs** — All costs to renovate or build, excluding land. In this tool: **Hard Cost + Hard Contingency + Soft Costs + Soft Contingency** = Non-Land Dev Cost.
+
+**Scope of Work (SOW)** — The detailed list of construction/renovation tasks and their costs. In this tool: represented by the Build Cost $/sf input and the Dev Cost breakdown table.
+            """)
+
+        with st.expander("📈 Returns"):
+            st.markdown("""
+**ROI (Return on Investment)** — Profit divided by total investment. In this tool: **Your Profit ÷ All-In Cost**.
+
+**Cash-on-Cash Return** — Annual cash flow divided by total cash invested. Most relevant for hold/rental scenarios. In this tool: shown in RE Metrics row when hold months > 0.
+
+**Equity Multiple** — Total cash returned divided by total cash invested. A 2.0x multiple means you doubled your money. In this tool: **Cash Returned ÷ Total Equity Invested**.
+
+**Equity (Built)** — The difference between what a property is worth and what you owe on it. In a new build: **ARV − Loan Balance**.
+
+**Appreciation** — The increase in property value over time. In this tool: modeled via the **Annual Price Change %** input in the sidebar.
+            """)
+
+        with st.expander("🏦 Financing"):
+            st.markdown("""
+**LTC (Loan-to-Cost)** — Loan amount as a percentage of total development cost. This is what construction lenders use. In this tool: the **LTC %** slider in the sidebar.
+
+**LTV (Loan-to-Value)** — Loan amount as a percentage of the property's value (ARV). This is what permanent/refi lenders care about. In this tool: **Loan Amount ÷ ARV**, shown in RE Metrics.
+
+**Hard Money Loan** — Short-term, high-interest loan (typically 10-15%) from private lenders, used for flips and construction. In this tool: detected when interest rate > 10%.
+
+**Bridge Loan** — Short-term financing that "bridges" between purchase and permanent financing or sale. In this tool: detected when timeline < 24 months with rate > 8%.
+
+**Points** — Upfront loan fees charged as a percentage of the loan amount. 1 point = 1% of loan. In this tool: the **Loan Fee %** input = points charged by the lender.
+            """)
+
+        with st.expander("💵 Costs"):
+            st.markdown("""
+**Holding/Carrying Costs** — Ongoing costs of owning a property during construction or while waiting to sell: loan interest, property taxes, insurance, utilities. In this tool: the **Carry Costs** line in the Deal Structure table.
+
+**Closing Costs** — Fees paid at purchase and sale: title insurance, escrow, recording fees, transfer taxes. In this tool: modeled as **Title/Closing %** and **Seller Concessions %** in the Exit Costs section.
+            """)
+
+        with st.expander("📊 Market"):
+            st.markdown("""
+**DOM (Days on Market)** — How long a property was listed before selling. Low DOM = hot market, high DOM = slow market. In this tool: shown in the Sold Comps and Active Listings tables, with median DOM in the metrics row.
+
+**Comps (Comparables)** — Recently sold properties similar to yours, used to estimate market value. In this tool: pulled automatically from Redfin within 1 mile, filtered by size (±30%) for the most relevant comparison.
+            """)
+
+        with st.expander("🚩 Property Flags"):
+            st.markdown("""
+**Distressed** — A property in poor condition or financial trouble, often sold below market value. Look for keywords in listing descriptions.
+
+**Foreclosure** — Lender repossessing a property due to loan default. In this tool: detected via TCAD deed records in the CLI version.
+
+**REO (Real Estate Owned)** — Bank-owned property after a failed foreclosure auction. Typically sold as-is at a discount.
+
+**Probate / Estate Sale** — Property being sold as part of a deceased owner's estate. Often priced to sell quickly.
+
+**Short Sale** — Sale where proceeds are less than the mortgage balance, requiring lender approval. Lengthy process but can offer discounts.
+
+**Motivated Seller** — An owner who needs to sell quickly (relocation, divorce, financial distress). In this tool: flagged when active listing DOM > 120 days.
+            """)
+
+        with st.expander("🏠 Deal Types"):
+            st.markdown("""
+**Exit Strategy** — Your plan for the property: flip (sell after rehab), hold (rent), or wholesale (assign contract). In this tool: modeled via Hold Months — 0 = flip, >0 = hold/rent then sell.
+
+**Assignment Fee** — In wholesaling, the fee earned by assigning your purchase contract to another buyer. Typically $5K-$25K.
+
+**Wholesaling** — Finding deals under contract and assigning them to other investors for a fee, without actually buying the property.
+
+**Fixer-Upper / TLC / As-Is** — Listing keywords indicating a property needs work. These are potential flip or development opportunities — exactly what this tool analyzes.
+            """)
 
 elif submitted and not show_analysis:
     # No address/ZIP — run financial-only mode

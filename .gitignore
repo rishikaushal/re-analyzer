@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 node_modules/
 .env
+# Firebase service account keys — NEVER commit
+*-firebase-adminsdk-*.json
+# Streamlit secrets
+.streamlit/secrets.toml
