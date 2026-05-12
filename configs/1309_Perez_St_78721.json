@@ -1,6 +1,6 @@
 {
   "property": {
-    "address": "1309 Perez St",
+    "address": "1309 Perez Street Austin TX 78721",
     "zip_code": "78721"
   },
   "deal_numbers": {
@@ -12,7 +12,7 @@
     "exit_psf": 475
   },
   "cost_details": {
-    "hard_contingency_pct": 5.0,
+    "hard_contingency_pct": 6.0,
     "arch_pct": 3.0,
     "structural_pct": 1.2,
     "mep_pct": 1.2,
@@ -23,12 +23,12 @@
     "legal_fixed": 5000,
     "arborist_fixed": 0,
     "utility_fees_fixed": 5000,
-    "soft_contingency": 0
+    "soft_contingency": 15000
   },
   "construction_financing": {
-    "ltv": 75.0,
-    "interest_rate": 10.0,
-    "draw_factor": 55.0,
+    "ltv": 100.0,
+    "interest_rate": 8.5,
+    "draw_factor": 60.0,
     "loan_fee_pct": 1.5,
     "land_loan_pct": 0.0,
     "land_interest_rate": 8.5,
@@ -37,43 +37,43 @@
   },
   "timeline": {
     "predev_months": 3,
-    "build_months": 12,
+    "build_months": 9,
     "hold_months": 0,
     "delay_months": 0
   },
   "construction_carry": {
-    "const_tax_rate": 2.2,
-    "const_insurance_annual": 3000,
-    "const_utilities": 200,
-    "const_misc": 150,
-    "carry_buffer_pct": 5.0
+    "const_tax_rate": 2.0,
+    "const_insurance_annual": 6000,
+    "const_utilities": 300,
+    "const_misc": 250,
+    "carry_buffer_pct": 10.0
   },
   "sale_exit_costs": {
     "broker_fee_pct": 4.0,
-    "title_closing_pct": 1.5,
-    "seller_concessions_pct": 2.5,
-    "sale_hold_months": 3,
-    "staging_base": 0,
-    "staging_per_unit": 0,
-    "marketing_base": 0,
-    "marketing_per_unit": 0,
-    "warranty_per_unit": 0
+    "title_closing_pct": 1.25,
+    "seller_concessions_pct": 1.0,
+    "sale_hold_months": 1.0,
+    "staging_base": 1500,
+    "staging_per_unit": 3500,
+    "marketing_base": 2000,
+    "marketing_per_unit": 1500,
+    "warranty_per_unit": 1500
   },
   "market_risk": {
     "price_decline": 5.0
   },
   "rental_hold": {
-    "rent_per_unit": 2000,
+    "rent_per_unit": 3100,
     "vacancy_pct": 5.0,
     "repairs_reserve_pct": 5.0,
     "mgmt_fee_pct": 8.0,
-    "other_opex_annual": 0,
-    "exit_cap_rate": 6.0,
-    "perm_mortgage_rate": 7.5,
+    "other_opex_annual": 3000,
+    "exit_cap_rate": 5.5,
+    "perm_mortgage_rate": 7.0,
     "amortization_years": 30,
     "taxable_value_psf": 300,
-    "prop_tax_rate": 2.2,
-    "insurance_monthly": 250,
+    "prop_tax_rate": 2.0,
+    "insurance_monthly": 500,
     "repairs_per_unit": 100,
     "common_utilities": 150,
     "leasing_reserve": 100
