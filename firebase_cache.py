@@ -41,19 +41,43 @@ def _get_db():
     try:
         import firebase_admin
         from firebase_admin import credentials, firestore
+        import os
 
-        # Try Streamlit secrets first
+        cred = None
+
+        # Method 1: Streamlit secrets
         try:
             import streamlit as st
             fb_config = dict(st.secrets["firebase"])
+            # Ensure private_key newlines are real (TOML may store as literal \n)
+            if "private_key" in fb_config and "\\n" in fb_config["private_key"]:
+                fb_config["private_key"] = fb_config["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(fb_config)
         except Exception:
-            # Fallback: look for local service account JSON
+            pass
+
+        # Method 2: GOOGLE_APPLICATION_CREDENTIALS env var
+        if cred is None:
+            gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            if gac and os.path.isfile(gac):
+                cred = credentials.Certificate(gac)
+
+        # Method 3: FIREBASE_CREDENTIALS env var (JSON string)
+        if cred is None:
+            fc_env = os.environ.get("FIREBASE_CREDENTIALS")
+            if fc_env:
+                import json as _json
+                cred = credentials.Certificate(_json.loads(fc_env))
+
+        # Method 4: Local service account JSON file
+        if cred is None:
             import glob as _glob
             sa_files = _glob.glob("*-firebase-adminsdk-*.json")
-            if not sa_files:
-                return None
-            cred = credentials.Certificate(sa_files[0])
+            if sa_files:
+                cred = credentials.Certificate(sa_files[0])
+
+        if cred is None:
+            return None
 
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
