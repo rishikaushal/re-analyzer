@@ -7,6 +7,7 @@ Pulls real market data, runs scenario analysis, and gives a clear verdict.
 
 import streamlit as st
 import numpy as np
+import json
 from datetime import datetime, timedelta
 
 from models import Permit, AnalysisResult
@@ -87,140 +88,260 @@ section[data-testid="stSidebar"] {
 st.title("🏡 Austin Deal Analyzer PRO")
 st.caption("Real market data + financial modeling → **Should you buy or not?**")
 
+# ── Parameter defaults (used for form values & config export/import) ──
+PARAM_DEFAULTS = {
+    "address": "1309 Perez St",
+    "zip_code": "78721",
+    "purchase_price": 450000,
+    "build_sf": 3000,
+    "units": 2,
+    "build_cost_psf": 250,
+    "exit_psf": 575,
+    "hard_contingency_pct": 6.0,
+    "split_soft": False,
+    "arch_pct": 3.0,
+    "eng_pct": 2.0,
+    "permit_fee_pct": 2.5,
+    "survey_pct": 1.0,
+    "insurance_dev_pct": 1.0,
+    "other_soft_pct": 0.9,
+    "soft_cost_pct": 10.4,
+    "soft_contingency": 30000,
+    "ltv": 100.0,
+    "interest_rate": 8.0,
+    "draw_factor": 62.5,
+    "loan_fee_pct": 1.0,
+    "build_months": 12,
+    "hold_months": 24,
+    "delay_months": 0,
+    "const_tax_rate": 2.0,
+    "const_insurance_annual": 6750,
+    "const_utilities": 450,
+    "const_misc": 325,
+    "carry_buffer_pct": 12.5,
+    "broker_fee_pct": 3.0,
+    "title_closing_pct": 1.3,
+    "seller_concessions_pct": 1.0,
+    "sale_hold_months": 1.5,
+    "staging_base": 1500,
+    "staging_per_unit": 3500,
+    "marketing_base": 2000,
+    "marketing_per_unit": 1500,
+    "warranty_per_unit": 1750,
+    "price_decline": 0.0,
+    "rent_per_unit": 3950,
+    "vacancy_pct": 5.0,
+    "mgmt_fee_pct": 7.0,
+    "perm_mortgage_rate": 7.0,
+    "amortization_years": 30,
+    "taxable_value_psf": 550,
+    "prop_tax_rate": 2.0,
+    "insurance_monthly": 375,
+    "repairs_per_unit": 150,
+    "common_utilities": 250,
+    "leasing_reserve": 250,
+}
+
+def _cfg(key):
+    """Get parameter value: session_state (from upload) > stored address/zip > default."""
+    if key in ("address", "zip_code"):
+        return st.session_state.get(key, PARAM_DEFAULTS[key])
+    return st.session_state.get(f"cfg_{key}", PARAM_DEFAULTS[key])
+
+
 # ── Sidebar: Input Form ──
 with st.sidebar:
     st.header("📥 Deal Inputs")
 
     expand_all = st.toggle("Expand all sections", value=False)
 
+    # ── Config Import / Export ──
+    with st.expander("📁 Import / Export Config", expanded=False):
+        uploaded_cfg = st.file_uploader("Upload config JSON", type=["json"], key="cfg_upload",
+                                        help="Upload a previously exported config to pre-fill all parameters")
+        if uploaded_cfg is not None and not st.session_state.get('_cfg_loaded'):
+            try:
+                cfg_data = json.loads(uploaded_cfg.read())
+                for k, v in cfg_data.items():
+                    if k in ("address", "zip_code"):
+                        st.session_state[k] = v
+                    elif k in PARAM_DEFAULTS:
+                        st.session_state[f"cfg_{k}"] = v
+                st.session_state['_cfg_loaded'] = True
+                st.success(f"✅ Loaded {len(cfg_data)} parameters")
+                st.rerun()
+            except (json.JSONDecodeError, Exception) as e:
+                st.error(f"❌ Invalid config file: {e}")
+        elif uploaded_cfg is None:
+            st.session_state['_cfg_loaded'] = False
+
     with st.form("deal_form"):
         st.subheader("🏠 Property")
-        address = st.text_input("Property Address", value=st.session_state.get('address', '1309 Perez St'),
+        address = st.text_input("Property Address", value=_cfg('address'),
                                placeholder="e.g., 2613 Nottingham Ln",
                                help="Street address of the property you're analyzing")
-        zip_code = st.text_input("ZIP Code", value=st.session_state.get('zip_code', '78721'),
+        zip_code = st.text_input("ZIP Code", value=_cfg('zip_code'),
                                  placeholder="e.g., 78704",
                                  help="Used to pull comps, permits, and zoning data")
 
         submitted = st.form_submit_button("🔍 Submit", use_container_width=True, type="primary")
 
         with st.expander("💵 Deal Numbers", expanded=expand_all):
-            purchase_price = st.number_input("Purchase Price ($)", min_value=0, value=450000, step=25000,
+            purchase_price = st.number_input("Purchase Price ($)", min_value=0, value=_cfg('purchase_price'), step=25000,
                                              help="Land acquisition cost or total purchase price")
-            build_sf = st.number_input("Total Build Size (sf)", min_value=0, value=3000, step=500,
+            build_sf = st.number_input("Total Build Size (sf)", min_value=0, value=_cfg('build_sf'), step=500,
                                        help="Total finished square footage across all units")
-            units = st.number_input("Number of Units", min_value=1, value=2, step=1,
+            units = st.number_input("Number of Units", min_value=1, value=_cfg('units'), step=1,
                                     help="Number of residential units (e.g., 2 for a duplex)")
-            build_cost_psf = st.number_input("Build Cost ($/sf)", min_value=0, value=250, step=25,
+            build_cost_psf = st.number_input("Build Cost ($/sf)", min_value=0, value=_cfg('build_cost_psf'), step=25,
                                              help="Hard construction cost per square foot (labor + materials)")
-            exit_psf = st.number_input("Exit Price ($/sf)", min_value=0, value=575, step=10,
+            exit_psf = st.number_input("Exit Price ($/sf)", min_value=0, value=_cfg('exit_psf'), step=10,
                                        help="Your target sale price per square foot")
 
         with st.expander("💵 Cost Details", expanded=expand_all):
-            hard_contingency_pct = st.number_input("Hard Cost Contingency (%)", min_value=0.0, max_value=15.0, value=6.0, step=0.5,
+            hard_contingency_pct = st.number_input("Hard Cost Contingency (%)", min_value=0.0, max_value=15.0, value=_cfg('hard_contingency_pct'), step=0.5,
                                              help="Buffer for unexpected construction cost overruns (typically 5-10%)")
-            split_soft = st.toggle("Split Soft Cost Categories", value=False,
+            split_soft = st.toggle("Split Soft Cost Categories", value=_cfg('split_soft'),
                                    help="Break down soft costs into individual line items instead of one percentage")
             if split_soft:
-                arch_pct = st.number_input("Architecture & Design (%)", min_value=0.0, max_value=10.0, value=3.0, step=0.5,
+                arch_pct = st.number_input("Architecture & Design (%)", min_value=0.0, max_value=10.0, value=_cfg('arch_pct'), step=0.5,
                                            help="Architect fees — as % of hard cost")
-                eng_pct = st.number_input("Engineering (structural/MEP) (%)", min_value=0.0, max_value=10.0, value=2.0, step=0.5,
+                eng_pct = st.number_input("Engineering (structural/MEP) (%)", min_value=0.0, max_value=10.0, value=_cfg('eng_pct'), step=0.5,
                                           help="Structural, mechanical, electrical, plumbing engineering — as % of hard cost")
-                permit_fee_pct = st.number_input("Permits & Impact Fees (%)", min_value=0.0, max_value=10.0, value=2.5, step=0.5,
+                permit_fee_pct = st.number_input("Permits & Impact Fees (%)", min_value=0.0, max_value=10.0, value=_cfg('permit_fee_pct'), step=0.5,
                                                  help="City permits, impact fees, utility connections — as % of hard cost")
-                survey_pct = st.number_input("Surveys & Geotech (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.5,
+                survey_pct = st.number_input("Surveys & Geotech (%)", min_value=0.0, max_value=5.0, value=_cfg('survey_pct'), step=0.5,
                                              help="Land survey, soil testing, environmental — as % of hard cost")
-                insurance_dev_pct = st.number_input("Builder's Risk Insurance (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.5,
+                insurance_dev_pct = st.number_input("Builder's Risk Insurance (%)", min_value=0.0, max_value=5.0, value=_cfg('insurance_dev_pct'), step=0.5,
                                                     help="Builder's risk / liability during construction — as % of hard cost")
-                other_soft_pct = st.number_input("Other Soft Costs (%)", min_value=0.0, max_value=10.0, value=0.9, step=0.1,
+                other_soft_pct = st.number_input("Other Soft Costs (%)", min_value=0.0, max_value=10.0, value=_cfg('other_soft_pct'), step=0.1,
                                                  help="Legal, accounting, misc — as % of hard cost")
                 soft_cost_pct = arch_pct + eng_pct + permit_fee_pct + survey_pct + insurance_dev_pct + other_soft_pct
                 st.caption(f"**Total Soft: {soft_cost_pct:.1f}%**")
             else:
-                soft_cost_pct = st.number_input("Soft Costs (arch/eng/permits) (%)", min_value=0.0, max_value=30.0, value=10.4, step=0.5,
+                soft_cost_pct = st.number_input("Soft Costs (arch/eng/permits) (%)", min_value=0.0, max_value=30.0, value=_cfg('soft_cost_pct'), step=0.5,
                                                 help="Architecture, engineering, permits, surveys — as % of hard cost")
                 arch_pct = eng_pct = permit_fee_pct = survey_pct = insurance_dev_pct = other_soft_pct = 0.0
-            soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=30000, step=5000,
+            soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=_cfg('soft_contingency'), step=5000,
                                                help="Fixed buffer for unexpected soft cost items")
 
         with st.expander("💰 Construction Financing", expanded=expand_all):
-            ltv = st.number_input("Loan to Cost (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0,
+            ltv = st.number_input("Loan to Cost (%)", min_value=0.0, max_value=100.0, value=_cfg('ltv'), step=1.0,
                             help="% of non-land development cost funded by debt")
-            interest_rate = st.number_input("Construction Interest Rate (%)", min_value=3.0, max_value=14.0, value=8.0, step=0.25,
+            interest_rate = st.number_input("Construction Interest Rate (%)", min_value=3.0, max_value=14.0, value=_cfg('interest_rate'), step=0.25,
                                       help="Annual interest rate on construction loan")
-            draw_factor = st.number_input("Draw Factor (%)", min_value=40.0, max_value=80.0, value=62.5, step=0.5,
+            draw_factor = st.number_input("Draw Factor (%)", min_value=40.0, max_value=80.0, value=_cfg('draw_factor'), step=0.5,
                                     help="Avg % of loan funded during construction")
-            loan_fee_pct = st.number_input("Construction Loan Fees (%)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
+            loan_fee_pct = st.number_input("Construction Loan Fees (%)", min_value=0.0, max_value=3.0, value=_cfg('loan_fee_pct'), step=0.1,
                                      help="Origination / lender fees on construction debt")
 
         with st.expander("📅 Timeline", expanded=expand_all):
-            build_months = st.number_input("Build Duration (months)", min_value=6, max_value=24, value=12, step=1,
+            build_months = st.number_input("Build Duration (months)", min_value=6, max_value=24, value=_cfg('build_months'), step=1,
                                     help="Estimated construction timeline from permit to CO")
-            hold_months = st.number_input("Hold Period After Build (months)", min_value=0, max_value=36, value=24, step=1,
+            hold_months = st.number_input("Hold Period After Build (months)", min_value=0, max_value=36, value=_cfg('hold_months'), step=1,
                                     help="0 = flip immediately, 24 = rent then sell")
-            delay_months = st.number_input("Expected Delays (months)", min_value=0, max_value=12, value=0, step=1,
+            delay_months = st.number_input("Expected Delays (months)", min_value=0, max_value=12, value=_cfg('delay_months'), step=1,
                                     help="Buffer for permitting delays, weather, supply issues")
 
         with st.expander("🏗️ Construction Carry", expanded=expand_all):
-            const_tax_rate = st.number_input("Construction Property Tax (%)", min_value=0.0, max_value=4.0, value=2.0, step=0.1,
+            const_tax_rate = st.number_input("Construction Property Tax (%)", min_value=0.0, max_value=4.0, value=_cfg('const_tax_rate'), step=0.1,
                                         help="Annual property tax rate during construction period")
-            const_insurance_annual = st.number_input("Construction Insurance ($/yr)", min_value=0, value=6750, step=250,
+            const_insurance_annual = st.number_input("Construction Insurance ($/yr)", min_value=0, value=_cfg('const_insurance_annual'), step=250,
                                                       help="Builder's risk + liability insurance per year during construction")
-            const_utilities = st.number_input("Construction Utilities ($/mo)", min_value=0, value=450, step=50,
+            const_utilities = st.number_input("Construction Utilities ($/mo)", min_value=0, value=_cfg('const_utilities'), step=50,
                                                help="Water, electric, temp power during construction")
-            const_misc = st.number_input("Construction Misc ($/mo)", min_value=0, value=325, step=25,
+            const_misc = st.number_input("Construction Misc ($/mo)", min_value=0, value=_cfg('const_misc'), step=25,
                                           help="Dumpster, portable toilet, misc during construction")
-            carry_buffer_pct = st.number_input("Carry Cost Buffer (%)", min_value=0.0, max_value=25.0, value=12.5, step=0.5,
+            carry_buffer_pct = st.number_input("Carry Cost Buffer (%)", min_value=0.0, max_value=25.0, value=_cfg('carry_buffer_pct'), step=0.5,
                                           help="Buffer on top of all carry costs for unexpected overruns")
 
         with st.expander("💸 Sale / Exit Costs", expanded=expand_all):
-            broker_fee_pct = st.number_input("Broker / Agent Fee (%)", min_value=0.0, max_value=6.0, value=3.0, step=0.25,
+            broker_fee_pct = st.number_input("Broker / Agent Fee (%)", min_value=0.0, max_value=6.0, value=_cfg('broker_fee_pct'), step=0.25,
                                        help="Listing + buyer agent commission")
-            title_closing_pct = st.number_input("Title + Closing Costs (%)", min_value=0.0, max_value=3.0, value=1.3, step=0.1,
+            title_closing_pct = st.number_input("Title + Closing Costs (%)", min_value=0.0, max_value=3.0, value=_cfg('title_closing_pct'), step=0.1,
                                           help="Title insurance, escrow, recording fees")
-            seller_concessions_pct = st.number_input("Seller Concessions (%)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
+            seller_concessions_pct = st.number_input("Seller Concessions (%)", min_value=0.0, max_value=3.0, value=_cfg('seller_concessions_pct'), step=0.1,
                                                help="Buyer credits, repairs, warranty")
             exit_cost_pct = broker_fee_pct + title_closing_pct + seller_concessions_pct
-            sale_hold_months = st.number_input('Sale Hold Period (months)', min_value=0.0, max_value=6.0, value=1.5, step=0.5,
+            sale_hold_months = st.number_input('Sale Hold Period (months)', min_value=0.0, max_value=6.0, value=_cfg('sale_hold_months'), step=0.5,
                                                 help='Months property sits on market before closing')
-            staging_base = st.number_input('Staging Base ($)', min_value=0, value=1500, step=500,
+            staging_base = st.number_input('Staging Base ($)', min_value=0, value=_cfg('staging_base'), step=500,
                                             help='Base staging cost (fixed)')
-            staging_per_unit = st.number_input('Staging Per Unit ($)', min_value=0, value=3500, step=500,
+            staging_per_unit = st.number_input('Staging Per Unit ($)', min_value=0, value=_cfg('staging_per_unit'), step=500,
                                                 help='Additional staging cost per unit')
-            marketing_base = st.number_input('Marketing Base ($)', min_value=0, value=2000, step=500,
+            marketing_base = st.number_input('Marketing Base ($)', min_value=0, value=_cfg('marketing_base'), step=500,
                                               help='Photography, signage, MLS listing fees')
-            marketing_per_unit = st.number_input('Marketing Per Unit ($)', min_value=0, value=1500, step=500,
+            marketing_per_unit = st.number_input('Marketing Per Unit ($)', min_value=0, value=_cfg('marketing_per_unit'), step=500,
                                                   help='Additional marketing cost per unit')
-            warranty_per_unit = st.number_input('Warranty Per Unit ($)', min_value=0, value=1750, step=250,
+            warranty_per_unit = st.number_input('Warranty Per Unit ($)', min_value=0, value=_cfg('warranty_per_unit'), step=250,
                                                  help='Home warranty cost per unit')
 
         with st.expander("📉 Market Risk", expanded=expand_all):
-            price_decline = st.number_input("Annual Price Change (%)", min_value=-15.0, max_value=10.0, value=0.0, step=0.5,
+            price_decline = st.number_input("Annual Price Change (%)", min_value=-15.0, max_value=10.0, value=_cfg('price_decline'), step=0.5,
                                       help="Expected annual change in market prices (negative = decline)")
 
         with st.expander("🏘️ Rental (Hold Strategy)", expanded=expand_all):
-            rent_per_unit = st.number_input("Monthly Rent / Unit ($)", min_value=0, value=3950, step=100,
+            rent_per_unit = st.number_input("Monthly Rent / Unit ($)", min_value=0, value=_cfg('rent_per_unit'), step=100,
                                           help="Expected monthly rent per unit after lease-up")
-            vacancy_pct = st.number_input("Vacancy / Credit Loss (%)", min_value=0.0, max_value=15.0, value=5.0, step=0.5,
+            vacancy_pct = st.number_input("Vacancy / Credit Loss (%)", min_value=0.0, max_value=15.0, value=_cfg('vacancy_pct'), step=0.5,
                                     help="% of gross rent lost to vacancy and bad debt")
-            mgmt_fee_pct = st.number_input("Management Fee (%)", min_value=0.0, max_value=15.0, value=7.0, step=0.5,
+            mgmt_fee_pct = st.number_input("Management Fee (%)", min_value=0.0, max_value=15.0, value=_cfg('mgmt_fee_pct'), step=0.5,
                                      help="Property management fee as % of effective rent")
-            perm_mortgage_rate = st.number_input("Permanent Mortgage Rate (%)", min_value=3.0, max_value=12.0, value=7.0, step=0.25,
+            perm_mortgage_rate = st.number_input("Permanent Mortgage Rate (%)", min_value=3.0, max_value=12.0, value=_cfg('perm_mortgage_rate'), step=0.25,
                                            help="Rate after construction loan converts to permanent")
-            amortization_years = st.number_input("Amortization (years)", min_value=15, max_value=30, value=30, step=5,
+            amortization_years = st.number_input("Amortization (years)", min_value=15, max_value=30, value=_cfg('amortization_years'), step=5,
                                                 help="Loan payoff schedule length (longer = lower monthly payment)")
-            taxable_value_psf = st.number_input("Taxable Value ($/sf)", min_value=0, value=550, step=25,
+            taxable_value_psf = st.number_input("Taxable Value ($/sf)", min_value=0, value=_cfg('taxable_value_psf'), step=25,
                                                 help="Assessed value for property tax during hold")
-            prop_tax_rate = st.number_input("Property Tax Rate (%)", min_value=1.0, max_value=4.0, value=2.0, step=0.1,
+            prop_tax_rate = st.number_input("Property Tax Rate (%)", min_value=1.0, max_value=4.0, value=_cfg('prop_tax_rate'), step=0.1,
                                       help="Annual property tax rate (Austin is typically ~2%)")
-            insurance_monthly = st.number_input("Landlord Insurance ($/mo)", min_value=0, value=375, step=25,
+            insurance_monthly = st.number_input("Landlord Insurance ($/mo)", min_value=0, value=_cfg('insurance_monthly'), step=25,
                                                 help="Monthly hazard + liability insurance premium")
-            repairs_per_unit = st.number_input("Repairs Reserve ($/unit/mo)", min_value=0, value=150, step=25,
+            repairs_per_unit = st.number_input("Repairs Reserve ($/unit/mo)", min_value=0, value=_cfg('repairs_per_unit'), step=25,
                                                help="Monthly reserve per unit for maintenance and repairs")
-            common_utilities = st.number_input("Common Utilities / Misc ($/mo)", min_value=0, value=250, step=25,
+            common_utilities = st.number_input("Common Utilities / Misc ($/mo)", min_value=0, value=_cfg('common_utilities'), step=25,
                                                help="Owner-paid utilities, landscaping, pest control, etc.")
-            leasing_reserve = st.number_input("Leasing / Turnover Reserve ($/mo)", min_value=0, value=250, step=25,
+            leasing_reserve = st.number_input("Leasing / Turnover Reserve ($/mo)", min_value=0, value=_cfg('leasing_reserve'), step=25,
                                               help="Reserve for tenant turnover, marketing, and lease-up costs")
+
+    # ── Export Config (after form, still in sidebar) ──
+    current_config = {
+        "address": address, "zip_code": zip_code,
+        "purchase_price": purchase_price, "build_sf": build_sf, "units": units,
+        "build_cost_psf": build_cost_psf, "exit_psf": exit_psf,
+        "hard_contingency_pct": hard_contingency_pct, "split_soft": split_soft,
+        "arch_pct": arch_pct, "eng_pct": eng_pct, "permit_fee_pct": permit_fee_pct,
+        "survey_pct": survey_pct, "insurance_dev_pct": insurance_dev_pct,
+        "other_soft_pct": other_soft_pct, "soft_cost_pct": soft_cost_pct,
+        "soft_contingency": soft_contingency,
+        "ltv": ltv, "interest_rate": interest_rate, "draw_factor": draw_factor,
+        "loan_fee_pct": loan_fee_pct,
+        "build_months": build_months, "hold_months": hold_months, "delay_months": delay_months,
+        "const_tax_rate": const_tax_rate, "const_insurance_annual": const_insurance_annual,
+        "const_utilities": const_utilities, "const_misc": const_misc,
+        "carry_buffer_pct": carry_buffer_pct,
+        "broker_fee_pct": broker_fee_pct, "title_closing_pct": title_closing_pct,
+        "seller_concessions_pct": seller_concessions_pct,
+        "sale_hold_months": sale_hold_months, "staging_base": staging_base,
+        "staging_per_unit": staging_per_unit, "marketing_base": marketing_base,
+        "marketing_per_unit": marketing_per_unit, "warranty_per_unit": warranty_per_unit,
+        "price_decline": price_decline,
+        "rent_per_unit": rent_per_unit, "vacancy_pct": vacancy_pct,
+        "mgmt_fee_pct": mgmt_fee_pct, "perm_mortgage_rate": perm_mortgage_rate,
+        "amortization_years": amortization_years, "taxable_value_psf": taxable_value_psf,
+        "prop_tax_rate": prop_tax_rate, "insurance_monthly": insurance_monthly,
+        "repairs_per_unit": repairs_per_unit, "common_utilities": common_utilities,
+        "leasing_reserve": leasing_reserve,
+    }
+    config_json = json.dumps(current_config, indent=2)
+    config_filename = f"deal_config_{address.replace(' ', '_')}_{zip_code}.json"
+    st.download_button(
+        "⬇️ Export Config",
+        data=config_json,
+        file_name=config_filename,
+        mime="application/json",
+        use_container_width=True,
+    )
 
 
 # ── Main Content ──
