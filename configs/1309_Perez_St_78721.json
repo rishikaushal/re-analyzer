@@ -2,7 +2,7 @@
   "deal_numbers": {
     "purchase_price": 500000,
     "demo_cost": 20000,
-    "units": 4,
+    "units": 2,
     "sf_per_unit": 1750,
     "build_cost_psf": 225,
     "exit_psf": 475
