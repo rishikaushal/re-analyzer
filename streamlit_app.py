@@ -2084,13 +2084,16 @@ if show_analysis and result is not None:
 
         scenarios = [_audit_scenario(cl) for cl in cost_levels]
 
-        def _render_audit_table(title, rows, fmt_overrides=None):
+        def _render_audit_table(title, rows, fmt_overrides=None, formulas=None):
             """Render a multi-column audit table matching Excel layout."""
-            st.markdown(f"#### {title}")
+            if title:
+                st.markdown(f"#### {title}")
             if fmt_overrides is None:
                 fmt_overrides = {}
-            md = "| Component | " + " | ".join(col_headers) + " |\n"
-            md += "|-----------|" + "|".join(["--------:"] * len(col_headers)) + "|\n"
+            if formulas is None:
+                formulas = {}
+            md = "| Component | Formula | " + " | ".join(col_headers) + " |\n"
+            md += "|-----------|---------|" + "|".join(["--------:"] * len(col_headers)) + "|\n"
             for row_label in rows:
                 vals = [scenarios[j][row_label] for j in range(4)]
                 fmt = fmt_overrides.get(row_label, "dollar")
@@ -2103,7 +2106,8 @@ if show_analysis and result is not None:
                 else:
                     cells = [f"${v:,.0f}" for v in vals]
                 bold = "**" if row_label.startswith("Total") or row_label in ("Profit", "Deal Status", "Exit Revenue") else ""
-                md += f"| {bold}{row_label}{bold} | " + " | ".join(cells) + " |\n"
+                formula_text = formulas.get(row_label, "")
+                md += f"| {bold}{row_label}{bold} | {formula_text} | " + " | ".join(cells) + " |\n"
             st.markdown(md)
 
         # ── 1. Pro Forma Summary ──
@@ -2118,6 +2122,24 @@ if show_analysis and result is not None:
             "Margin on Cost": "pct", "Equity % of Total Cost": "pct",
             "Equity Multiple": "mult", "Profit on Equity": "pct",
             "Deal Status": "text",
+        }, formulas={
+            "Land Acquisition": "Input",
+            "Demo / Site Prep": "Input",
+            "Vertical Hard Cost": f"Total SF × Build $/sf",
+            "Hard Cost Contingency": f"HC × {hard_contingency_pct}%",
+            "Soft Costs": "= Soft Breakdown Total",
+            "Soft Contingency": "Input (fixed $)",
+            "Carry Costs": "= Carry Breakdown Total",
+            "Sales Costs": "= Sales Breakdown Total",
+            "Total Project Cost": "SUM(Land → Sales)",
+            "Exit Revenue": f"Total SF × Exit $/sf",
+            "Profit": "Revenue − Total Cost",
+            "Margin on Cost": "Profit ÷ Total Cost",
+            "Equity Invested ($)": "MAX(0, Cost − Loans)",
+            "Equity % of Total Cost": "Equity ÷ Total Cost",
+            "Equity Multiple": "(Equity + Profit) ÷ Equity",
+            "Profit on Equity": "Profit ÷ Equity",
+            "Deal Status": "GO/REVIEW/PASS rules",
         })
 
         st.markdown("---")
@@ -2128,7 +2150,15 @@ if show_analysis and result is not None:
             "Survey", "Geotech", "Civil", "Permits / Fees",
             "Legal / Admin", "Arborist", "Utility Application Fees",
             "Total Soft Costs",
-        ])
+        ], formulas={
+            "Architecture": f"HC × {arch_pct}%",
+            "Structural": f"HC × {structural_pct}%",
+            "MEP Engineering": f"HC × {mep_pct}%",
+            "Survey": "Fixed $", "Geotech": "Fixed $", "Civil": "Fixed $",
+            "Permits / Fees": "Fixed $", "Legal / Admin": "Fixed $",
+            "Arborist": "Fixed $", "Utility Application Fees": "Fixed $",
+            "Total Soft Costs": "SUM(above)",
+        })
 
         st.markdown("---")
 
@@ -2139,7 +2169,16 @@ if show_analysis and result is not None:
             "Land Interest", "Construction Interest", "Taxes",
             "Insurance", "Utilities", "Misc Carry",
             "Carry Buffer", "Total Carry",
-        ])
+        ], formulas={
+            "Land Interest": f"Land × {land_equity_cost_rate}% × {tcm_audit}/12" if land_loan_pct == 0 and use_land_cost_of_capital else f"Land × {land_loan_pct}% × {land_interest_rate}% × {tcm_audit}/12",
+            "Construction Interest": f"NonLandDev × {ltv}% × {interest_rate}% × {draw_factor}% × {build_months}/12",
+            "Taxes": f"(Land + 50%(HC+Soft+Demo)) × {const_tax_rate}% × {tcm_audit}/12",
+            "Insurance": f"${const_insurance_annual:,}/yr × {tcm_audit}/12",
+            "Utilities": f"${const_utilities:,}/mo × {tcm_audit} mo",
+            "Misc Carry": f"${const_misc:,}/mo × {tcm_audit} mo",
+            "Carry Buffer": f"Subtotal × {carry_buffer_pct}%",
+            "Total Carry": "SUM(above)",
+        })
 
         st.markdown("---")
 
@@ -2147,7 +2186,15 @@ if show_analysis and result is not None:
         _render_audit_table("💸 Sales Cost Breakdown", [
             "Realtor", "Title + Closing", "Concessions",
             "Staging", "Marketing", "Warranty", "Total Sales Cost",
-        ])
+        ], formulas={
+            "Realtor": f"Revenue × {broker_fee_pct}%",
+            "Title + Closing": f"Revenue × {title_closing_pct}%",
+            "Concessions": f"Revenue × {seller_concessions_pct}%",
+            "Staging": f"${staging_base:,} + ${staging_per_unit:,} × {units}",
+            "Marketing": f"${marketing_base:,} + ${marketing_per_unit:,} × {units}",
+            "Warranty": f"${warranty_per_unit:,} × {units}",
+            "Total Sales Cost": "SUM(above)",
+        })
 
         st.markdown("---")
 
