@@ -2055,7 +2055,7 @@ if show_analysis and result is not None:
         ]
         audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
         for label, formula, value in audit_carry:
-            if label == "Carry Period":
+            if label == "Total Carry Period":
                 audit_md += f"| {label} | {formula} | {value} months |\n"
             else:
                 audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
