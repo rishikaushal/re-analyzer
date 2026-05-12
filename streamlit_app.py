@@ -92,46 +92,66 @@ st.caption("Real market data + financial modeling → **Should you buy or not?**
 PARAM_DEFAULTS = {
     "address": "1309 Perez St",
     "zip_code": "78721",
-    "purchase_price": 450000,
-    "build_sf": 3000,
-    "units": 2,
+    "purchase_price": 500000,
+    "build_sf": 7000,
+    "units": 4,
+    "sf_per_unit": 1750,
+    "demo_cost": 20000,
     "build_cost_psf": 250,
-    "exit_psf": 575,
+    "exit_psf": 475,
     "hard_contingency_pct": 6.0,
-    "split_soft": False,
+    "split_soft": True,
     "arch_pct": 3.0,
+    "structural_pct": 1.2,
+    "mep_pct": 1.2,
     "eng_pct": 2.0,
     "permit_fee_pct": 2.5,
     "survey_pct": 1.0,
     "insurance_dev_pct": 1.0,
     "other_soft_pct": 0.9,
     "soft_cost_pct": 10.4,
-    "soft_contingency": 30000,
+    "soft_contingency": 15000,
+    # Fixed soft costs ($)
+    "survey_fixed": 1000,
+    "geotech_fixed": 1500,
+    "civil_fixed": 0,
+    "permit_fixed": 18000,
+    "legal_fixed": 5000,
+    "arborist_fixed": 0,
+    "utility_fees_fixed": 5000,
     "ltv": 100.0,
-    "interest_rate": 8.0,
-    "draw_factor": 62.5,
+    "interest_rate": 8.5,
+    "draw_factor": 60.0,
     "loan_fee_pct": 1.0,
-    "build_months": 12,
-    "hold_months": 24,
+    "land_loan_pct": 0.0,
+    "land_interest_rate": 8.5,
+    "land_equity_cost_rate": 7.0,
+    "use_land_cost_of_capital": True,
+    "predev_months": 3,
+    "build_months": 9,
+    "hold_months": 0,
     "delay_months": 0,
+    "sale_hold_months": 1.0,
     "const_tax_rate": 2.0,
-    "const_insurance_annual": 6750,
-    "const_utilities": 450,
-    "const_misc": 325,
-    "carry_buffer_pct": 12.5,
-    "broker_fee_pct": 3.0,
-    "title_closing_pct": 1.3,
+    "const_insurance_annual": 6000,
+    "const_utilities": 300,
+    "const_misc": 250,
+    "carry_buffer_pct": 10.0,
+    "broker_fee_pct": 4.0,
+    "title_closing_pct": 1.25,
     "seller_concessions_pct": 1.0,
-    "sale_hold_months": 1.5,
     "staging_base": 1500,
     "staging_per_unit": 3500,
     "marketing_base": 2000,
     "marketing_per_unit": 1500,
-    "warranty_per_unit": 1750,
+    "warranty_per_unit": 1500,
     "price_decline": 0.0,
-    "rent_per_unit": 3950,
+    "rent_per_unit": 3100,
     "vacancy_pct": 5.0,
-    "mgmt_fee_pct": 7.0,
+    "repairs_reserve_pct": 5.0,
+    "mgmt_fee_pct": 8.0,
+    "other_opex_annual": 3000,
+    "exit_cap_rate": 5.5,
     "perm_mortgage_rate": 7.0,
     "amortization_years": 30,
     "taxable_value_psf": 550,
@@ -201,12 +221,16 @@ with st.sidebar:
         submitted = st.form_submit_button("🔍 Submit", use_container_width=True, type="primary")
 
         with st.expander("💵 Deal Numbers", expanded=expand_all):
-            purchase_price = st.number_input("Purchase Price ($)", min_value=0, value=_cfg('purchase_price'), step=25000,
-                                             help="Land acquisition cost or total purchase price")
-            build_sf = st.number_input("Total Build Size (sf)", min_value=0, value=_cfg('build_sf'), step=500,
-                                       help="Total finished square footage across all units")
+            purchase_price = st.number_input("Land Price ($)", min_value=0, value=_cfg('purchase_price'), step=25000,
+                                             help="Land acquisition cost")
+            demo_cost = st.number_input("Demo / Site Prep ($)", min_value=0, value=_cfg('demo_cost'), step=5000,
+                                        help="Demolition and site preparation cost (0 if no teardown)")
             units = st.number_input("Number of Units", min_value=1, value=_cfg('units'), step=1,
-                                    help="Number of residential units (e.g., 2 for a duplex)")
+                                    help="Number of residential units (e.g., 4 for fourplex)")
+            sf_per_unit = st.number_input("Sq Ft per Unit", min_value=0, value=_cfg('sf_per_unit'), step=50,
+                                          help="Square footage per unit")
+            build_sf = units * sf_per_unit
+            st.caption(f"**Total Sellable SF: {build_sf:,}**")
             build_cost_psf = st.number_input("Build Cost ($/sf)", min_value=0, value=_cfg('build_cost_psf'), step=25,
                                              help="Hard construction cost per square foot (labor + materials)")
             exit_psf = st.number_input("Exit Price ($/sf)", min_value=0, value=_cfg('exit_psf'), step=10,
@@ -215,43 +239,63 @@ with st.sidebar:
         with st.expander("💵 Cost Details", expanded=expand_all):
             hard_contingency_pct = st.number_input("Hard Cost Contingency (%)", min_value=0.0, max_value=15.0, value=_cfg('hard_contingency_pct'), step=0.5,
                                              help="Buffer for unexpected construction cost overruns (typically 5-10%)")
-            split_soft = st.toggle("Split Soft Cost Categories", value=_cfg('split_soft'),
-                                   help="Break down soft costs into individual line items instead of one percentage")
-            if split_soft:
-                arch_pct = st.number_input("Architecture & Design (%)", min_value=0.0, max_value=10.0, value=_cfg('arch_pct'), step=0.5,
-                                           help="Architect fees — as % of hard cost")
-                eng_pct = st.number_input("Engineering (structural/MEP) (%)", min_value=0.0, max_value=10.0, value=_cfg('eng_pct'), step=0.5,
-                                          help="Structural, mechanical, electrical, plumbing engineering — as % of hard cost")
-                permit_fee_pct = st.number_input("Permits & Impact Fees (%)", min_value=0.0, max_value=10.0, value=_cfg('permit_fee_pct'), step=0.5,
-                                                 help="City permits, impact fees, utility connections — as % of hard cost")
-                survey_pct = st.number_input("Surveys & Geotech (%)", min_value=0.0, max_value=5.0, value=_cfg('survey_pct'), step=0.5,
-                                             help="Land survey, soil testing, environmental — as % of hard cost")
-                insurance_dev_pct = st.number_input("Builder's Risk Insurance (%)", min_value=0.0, max_value=5.0, value=_cfg('insurance_dev_pct'), step=0.5,
-                                                    help="Builder's risk / liability during construction — as % of hard cost")
-                other_soft_pct = st.number_input("Other Soft Costs (%)", min_value=0.0, max_value=10.0, value=_cfg('other_soft_pct'), step=0.1,
-                                                 help="Legal, accounting, misc — as % of hard cost")
-                soft_cost_pct = arch_pct + eng_pct + permit_fee_pct + survey_pct + insurance_dev_pct + other_soft_pct
-                st.caption(f"**Total Soft: {soft_cost_pct:.1f}%**")
-            else:
-                soft_cost_pct = st.number_input("Soft Costs (arch/eng/permits) (%)", min_value=0.0, max_value=30.0, value=_cfg('soft_cost_pct'), step=0.5,
-                                                help="Architecture, engineering, permits, surveys — as % of hard cost")
-                arch_pct = eng_pct = permit_fee_pct = survey_pct = insurance_dev_pct = other_soft_pct = 0.0
+            st.markdown("**Soft Costs — % of Hard Cost**")
+            arch_pct = st.number_input("Architecture (%)", min_value=0.0, max_value=10.0, value=_cfg('arch_pct'), step=0.5,
+                                       help="Architect fees — as % of hard cost")
+            structural_pct = st.number_input("Structural (%)", min_value=0.0, max_value=10.0, value=_cfg('structural_pct'), step=0.1,
+                                             help="Structural engineering — as % of hard cost")
+            mep_pct = st.number_input("MEP Engineering (%)", min_value=0.0, max_value=10.0, value=_cfg('mep_pct'), step=0.1,
+                                      help="Mechanical, electrical, plumbing engineering — as % of hard cost")
+            st.markdown("**Soft Costs — Fixed ($)**")
+            survey_fixed = st.number_input("Survey ($)", min_value=0, value=_cfg('survey_fixed'), step=500,
+                                           help="Land survey cost")
+            geotech_fixed = st.number_input("Geotech ($)", min_value=0, value=_cfg('geotech_fixed'), step=500,
+                                            help="Soil testing / geotechnical report")
+            civil_fixed = st.number_input("Civil ($)", min_value=0, value=_cfg('civil_fixed'), step=500,
+                                          help="Civil engineering")
+            permit_fixed = st.number_input("Permit Allowance ($)", min_value=0, value=_cfg('permit_fixed'), step=1000,
+                                           help="City permits, impact fees, utility connections")
+            legal_fixed = st.number_input("Legal / Admin ($)", min_value=0, value=_cfg('legal_fixed'), step=500,
+                                          help="Legal, accounting, administrative costs")
+            arborist_fixed = st.number_input("Arborist ($)", min_value=0, value=_cfg('arborist_fixed'), step=500,
+                                             help="Tree survey / arborist report")
+            utility_fees_fixed = st.number_input("Utility App Fees ($)", min_value=0, value=_cfg('utility_fees_fixed'), step=500,
+                                                 help="Water, sewer, electric utility application fees")
             soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=_cfg('soft_contingency'), step=5000,
                                                help="Fixed buffer for unexpected soft cost items")
+            # Compute combined soft cost values
+            split_soft = True
+            eng_pct = structural_pct + mep_pct
+            permit_fee_pct = 0.0
+            survey_pct = 0.0
+            insurance_dev_pct = 0.0
+            other_soft_pct = 0.0
+            soft_cost_pct = arch_pct + structural_pct + mep_pct
+            total_fixed_soft = survey_fixed + geotech_fixed + civil_fixed + permit_fixed + legal_fixed + arborist_fixed + utility_fees_fixed
 
         with st.expander("💰 Construction Financing", expanded=expand_all):
-            ltv = st.number_input("Loan to Cost (%)", min_value=0.0, max_value=100.0, value=_cfg('ltv'), step=1.0,
-                            help="% of non-land development cost funded by debt")
+            ltv = st.number_input("Construction LTC (%)", min_value=0.0, max_value=100.0, value=_cfg('ltv'), step=1.0,
+                            help="% of non-land development cost funded by construction debt")
             interest_rate = st.number_input("Construction Interest Rate (%)", min_value=3.0, max_value=14.0, value=_cfg('interest_rate'), step=0.25,
                                       help="Annual interest rate on construction loan")
-            draw_factor = st.number_input("Draw Factor (%)", min_value=40.0, max_value=80.0, value=_cfg('draw_factor'), step=0.5,
-                                    help="Avg % of loan funded during construction")
+            draw_factor = st.number_input("Average Draw Factor (%)", min_value=40.0, max_value=80.0, value=_cfg('draw_factor'), step=0.5,
+                                    help="Avg % of loan drawn during construction")
             loan_fee_pct = st.number_input("Construction Loan Fees (%)", min_value=0.0, max_value=3.0, value=_cfg('loan_fee_pct'), step=0.1,
                                      help="Origination / lender fees on construction debt")
+            land_loan_pct = st.number_input("Land Loan (%)", min_value=0.0, max_value=100.0, value=_cfg('land_loan_pct'), step=5.0,
+                                            help="% of land price funded by debt (0 = all cash)")
+            land_interest_rate = st.number_input("Land Interest Rate (%)", min_value=0.0, max_value=14.0, value=_cfg('land_interest_rate'), step=0.25,
+                                                 help="Annual interest rate on land loan")
+            land_equity_cost_rate = st.number_input("Land Equity Cost Rate (%)", min_value=0.0, max_value=14.0, value=_cfg('land_equity_cost_rate'), step=0.25,
+                                                    help="Opportunity cost of capital for cash land (used if no land loan)")
+            use_land_cost_of_capital = st.toggle("Use Land Cost of Capital if No Loan", value=_cfg('use_land_cost_of_capital'),
+                                                 help="Apply equity cost rate on land if no land loan")
 
         with st.expander("📅 Timeline", expanded=expand_all):
-            build_months = st.number_input("Build Duration (months)", min_value=6, max_value=24, value=_cfg('build_months'), step=1,
-                                    help="Estimated construction timeline from permit to CO")
+            predev_months = st.number_input("Predevelopment (months)", min_value=0, max_value=12, value=_cfg('predev_months'), step=1,
+                                    help="Predevelopment period before construction starts (design, permitting)")
+            build_months = st.number_input("Construction Duration (months)", min_value=6, max_value=24, value=_cfg('build_months'), step=1,
+                                    help="Construction timeline from groundbreaking to CO")
             hold_months = st.number_input("Hold Period After Build (months)", min_value=0, max_value=36, value=_cfg('hold_months'), step=1,
                                     help="0 = flip immediately, 24 = rent then sell")
             delay_months = st.number_input("Expected Delays (months)", min_value=0, max_value=12, value=_cfg('delay_months'), step=1,
@@ -299,8 +343,14 @@ with st.sidebar:
                                           help="Expected monthly rent per unit after lease-up")
             vacancy_pct = st.number_input("Vacancy / Credit Loss (%)", min_value=0.0, max_value=15.0, value=_cfg('vacancy_pct'), step=0.5,
                                     help="% of gross rent lost to vacancy and bad debt")
-            mgmt_fee_pct = st.number_input("Management Fee (%)", min_value=0.0, max_value=15.0, value=_cfg('mgmt_fee_pct'), step=0.5,
-                                     help="Property management fee as % of effective rent")
+            repairs_reserve_pct = st.number_input("Repairs Reserve (% of EGI)", min_value=0.0, max_value=15.0, value=_cfg('repairs_reserve_pct'), step=0.5,
+                                                  help="Repairs reserve as % of effective gross income")
+            mgmt_fee_pct = st.number_input("Management Fee (% of EGI)", min_value=0.0, max_value=15.0, value=_cfg('mgmt_fee_pct'), step=0.5,
+                                     help="Property management fee as % of effective gross income")
+            other_opex_annual = st.number_input("Other Opex ($/yr)", min_value=0, value=_cfg('other_opex_annual'), step=500,
+                                                help="Other annual operating expenses")
+            exit_cap_rate = st.number_input("Exit Cap Rate (%)", min_value=3.0, max_value=10.0, value=_cfg('exit_cap_rate'), step=0.25,
+                                           help="Cap rate for implied value calculation")
             perm_mortgage_rate = st.number_input("Permanent Mortgage Rate (%)", min_value=3.0, max_value=12.0, value=_cfg('perm_mortgage_rate'), step=0.25,
                                            help="Rate after construction loan converts to permanent")
             amortization_years = st.number_input("Amortization (years)", min_value=15, max_value=30, value=_cfg('amortization_years'), step=5,
@@ -325,21 +375,28 @@ with st.sidebar:
             "zip_code": zip_code,
         },
         "deal_numbers": {
-            "purchase_price": purchase_price, "build_sf": build_sf, "units": units,
+            "purchase_price": purchase_price, "demo_cost": demo_cost,
+            "units": units, "sf_per_unit": sf_per_unit,
             "build_cost_psf": build_cost_psf, "exit_psf": exit_psf,
         },
         "cost_details": {
-            "hard_contingency_pct": hard_contingency_pct, "split_soft": split_soft,
-            "arch_pct": arch_pct, "eng_pct": eng_pct, "permit_fee_pct": permit_fee_pct,
-            "survey_pct": survey_pct, "insurance_dev_pct": insurance_dev_pct,
-            "other_soft_pct": other_soft_pct, "soft_cost_pct": soft_cost_pct,
+            "hard_contingency_pct": hard_contingency_pct,
+            "arch_pct": arch_pct, "structural_pct": structural_pct, "mep_pct": mep_pct,
+            "survey_fixed": survey_fixed, "geotech_fixed": geotech_fixed,
+            "civil_fixed": civil_fixed, "permit_fixed": permit_fixed,
+            "legal_fixed": legal_fixed, "arborist_fixed": arborist_fixed,
+            "utility_fees_fixed": utility_fees_fixed,
             "soft_contingency": soft_contingency,
         },
         "construction_financing": {
             "ltv": ltv, "interest_rate": interest_rate, "draw_factor": draw_factor,
             "loan_fee_pct": loan_fee_pct,
+            "land_loan_pct": land_loan_pct, "land_interest_rate": land_interest_rate,
+            "land_equity_cost_rate": land_equity_cost_rate,
+            "use_land_cost_of_capital": use_land_cost_of_capital,
         },
         "timeline": {
+            "predev_months": predev_months,
             "build_months": build_months, "hold_months": hold_months, "delay_months": delay_months,
         },
         "construction_carry": {
@@ -359,7 +416,10 @@ with st.sidebar:
         },
         "rental_hold": {
             "rent_per_unit": rent_per_unit, "vacancy_pct": vacancy_pct,
-            "mgmt_fee_pct": mgmt_fee_pct, "perm_mortgage_rate": perm_mortgage_rate,
+            "repairs_reserve_pct": repairs_reserve_pct,
+            "mgmt_fee_pct": mgmt_fee_pct, "other_opex_annual": other_opex_annual,
+            "exit_cap_rate": exit_cap_rate,
+            "perm_mortgage_rate": perm_mortgage_rate,
             "amortization_years": amortization_years, "taxable_value_psf": taxable_value_psf,
             "prop_tax_rate": prop_tax_rate, "insurance_monthly": insurance_monthly,
             "repairs_per_unit": repairs_per_unit, "common_utilities": common_utilities,
@@ -402,43 +462,71 @@ elif st.session_state.get('analysis_done') and not submitted:
 if show_analysis and result is not None:
 
     # ══════════════════════════════════════════════
-    # STEP 2: Financial calculations
+    # STEP 2: Financial calculations (matching Nitin Infill Template v1.1)
     # ══════════════════════════════════════════════
     hard_cost = build_cost_psf * build_sf
     hard_contingency = hard_cost * (hard_contingency_pct / 100)
-    soft_costs = hard_cost * (soft_cost_pct / 100)
-    total_dev_cost = hard_cost + hard_contingency + soft_costs + soft_contingency
-    total_project_cost = purchase_price + total_dev_cost
+
+    # Soft costs: % items (of hard cost) + fixed $ items
+    soft_pct_costs = hard_cost * (arch_pct / 100) + hard_cost * (structural_pct / 100) + hard_cost * (mep_pct / 100)
+    soft_fixed_costs = survey_fixed + geotech_fixed + civil_fixed + permit_fixed + legal_fixed + arborist_fixed + utility_fees_fixed
+    soft_costs = soft_pct_costs + soft_fixed_costs
+    # Keep soft_cost_pct for backward compat (% items only)
+    soft_cost_pct = arch_pct + structural_pct + mep_pct
+
+    # Non-land development cost (Demo + HC + HC Contingency + Soft + Soft Contingency)
+    non_land_dev_cost = demo_cost + hard_cost + hard_contingency + soft_costs + soft_contingency
+    total_dev_cost = non_land_dev_cost  # alias for backward compat
+    total_project_cost = purchase_price + non_land_dev_cost
+
+    # Timeline (matching Excel: Total Months = Predev + Construction + Sale Hold)
+    total_carry_months = predev_months + build_months + delay_months + sale_hold_months
+    total_months = predev_months + build_months + hold_months + delay_months
+    timeline_years = total_months / 12
+    carry_months = predev_months + build_months + delay_months  # for carry cost calc
 
     # Construction financing
-    loan_amount = total_dev_cost * (ltv / 100)  # LTC on development costs (not land)
-    equity = total_project_cost - loan_amount
-    total_months = build_months + hold_months + delay_months
-    timeline_years = total_months / 12
+    # Construction loan applies to non-land development costs only
+    construction_loan = non_land_dev_cost * (ltv / 100)
+    land_loan = purchase_price * (land_loan_pct / 100)
+    loan_amount = construction_loan  # used downstream for permanent debt
+    equity = total_project_cost - land_loan - construction_loan
 
-    # Construction interest (draw factor applies during build only)
-    construction_interest = loan_amount * (interest_rate / 100) * (draw_factor / 100) * (build_months + delay_months) / 12
-    loan_fees = loan_amount * (loan_fee_pct / 100)
+    # Land carry (Excel formula: B48)
+    # If land_loan_pct > 0: land interest = land_price * land_loan% * land_rate * total_months/12
+    # Else if use_land_cost_of_capital: land carry = land_price * equity_cost_rate * total_months/12
+    if land_loan_pct > 0:
+        carry_land_interest = purchase_price * (land_loan_pct / 100) * (land_interest_rate / 100) * total_carry_months / 12
+    elif use_land_cost_of_capital:
+        carry_land_interest = purchase_price * (land_equity_cost_rate / 100) * total_carry_months / 12
+    else:
+        carry_land_interest = 0
 
-    # Construction carry costs (during build, matching Karen Ave Excel)
-    carry_months = build_months + delay_months
-    carry_loan_interest = (purchase_price + total_dev_cost) * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * carry_months / 12
-    carry_taxes = (purchase_price + 0.5 * total_dev_cost) * (const_tax_rate / 100) * carry_months / 12
-    carry_insurance = const_insurance_annual * carry_months / 12
-    carry_utilities = const_utilities * carry_months
-    carry_misc = const_misc * carry_months
-    carry_subtotal = carry_loan_interest + carry_taxes + carry_insurance + carry_utilities + carry_misc
+    # Construction interest (Excel formula: B49)
+    # = (Demo + HC + HCCont + Soft + SoftCont) * LTC% * Rate * DrawFactor * ConstructionMonths/12
+    construction_interest = non_land_dev_cost * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * build_months / 12
+    loan_fees = construction_loan * (loan_fee_pct / 100)
+
+    # Carry costs (Excel formulas: B50-B55)
+    # Taxes: (LandPrice + 0.5*(HC + Soft + Demo)) * TaxRate * TotalCarryMonths/12
+    carry_taxes = (purchase_price + 0.5 * (hard_cost + soft_costs + demo_cost)) * (const_tax_rate / 100) * total_carry_months / 12
+    carry_insurance = const_insurance_annual * total_carry_months / 12
+    carry_utilities = const_utilities * total_carry_months
+    carry_misc = const_misc * total_carry_months
+    carry_subtotal = carry_land_interest + construction_interest + carry_taxes + carry_insurance + carry_utilities + carry_misc
     carry_buffer = carry_subtotal * (carry_buffer_pct / 100)
     total_carry = carry_subtotal + carry_buffer
+    # Keep carry_loan_interest alias for audit trail
+    carry_loan_interest = carry_land_interest + construction_interest
 
-    # Sales costs (matching Karen Ave Excel)
+    # Sales costs (Excel formulas: B61-B67)
     user_revenue_est = exit_psf * build_sf
     staging_cost = staging_base + staging_per_unit * units
     marketing_cost = marketing_base + marketing_per_unit * units
     warranty_cost = warranty_per_unit * units
     variable_sales = user_revenue_est * (exit_cost_pct / 100)
-    holding_during_sale = total_carry / max(carry_months, 1) * sale_hold_months
-    total_sales_cost = variable_sales + staging_cost + marketing_cost + warranty_cost + holding_during_sale
+    holding_during_sale = 0  # sale hold already included in total_carry_months
+    total_sales_cost = variable_sales + staging_cost + marketing_cost + warranty_cost
 
     # Holding costs during rental period
     if hold_months > 0:
@@ -533,15 +621,14 @@ if show_analysis and result is not None:
     exit_costs_user = user_revenue * (exit_cost_pct / 100)
     exit_costs_market = adjusted_revenue * (exit_cost_pct / 100)
 
-    # Profit calculation — Equity/Debt model (matches Excel)
+    # Profit calculation — matching Excel template
+    # Excel equity: Total Project Cost - Land Loan - Construction/Dev Loan
     if hold_months > 0:
-        # Total equity invested = Land + Construction Interest + Loan Fees + Additional Equity for negative CF
         cumulative_cf = monthly_cf_after_debt * hold_months
         additional_equity_needed = max(0, -cumulative_cf)
         total_equity_invested = purchase_price + loan_fees + total_carry + staging_cost + marketing_cost + warranty_cost + additional_equity_needed
 
-        # At sale: pay off loan balance, keep net proceeds + any positive rental CF
-        net_sale_before_debt = user_revenue - exit_costs_user - staging_cost - marketing_cost - warranty_cost - holding_during_sale
+        net_sale_before_debt = user_revenue - exit_costs_user - staging_cost - marketing_cost - warranty_cost
         net_sale_after_debt = net_sale_before_debt - loan_balance_after_hold
         positive_rental_cf = max(0, cumulative_cf)
         total_cash_returned = net_sale_after_debt + positive_rental_cf
@@ -550,20 +637,32 @@ if show_analysis and result is not None:
         equity_multiple = total_cash_returned / total_equity_invested if total_equity_invested > 0 else 0
 
         # Market-based profit
-        net_market_sale = adjusted_revenue - exit_costs_market - staging_cost - marketing_cost - warranty_cost - holding_during_sale
+        net_market_sale = adjusted_revenue - exit_costs_market - staging_cost - marketing_cost - warranty_cost
         market_net_after_debt = net_market_sale - loan_balance_after_hold
         market_cash_returned = market_net_after_debt + positive_rental_cf
         market_profit = market_cash_returned - total_equity_invested
     else:
-        # Simple flip model (includes carry + sales costs from Karen Ave Excel)
-        # Note: total_carry already includes loan interest, so don't add construction_interest separately
-        total_cost = total_project_cost + loan_fees + total_carry + total_sales_cost
-        total_equity_invested = total_cost
+        # Flip model (matching Excel Pro Forma Summary)
+        # Total Project Cost = Land + Demo + HC + HC Cont + Soft + Soft Cont + Carry + Sales
+        total_cost = total_project_cost + total_carry + total_sales_cost
+        # Equity = Total Cost - Land Loan - Construction Loan
+        total_equity_invested = max(0, total_cost - land_loan - construction_loan)
         user_profit = user_revenue - total_cost
+        margin_on_cost = user_profit / total_cost if total_cost > 0 else 0
+        equity_multiple = (total_equity_invested + user_profit) / total_equity_invested if total_equity_invested > 0 else 0
+        profit_on_equity = user_profit / total_equity_invested if total_equity_invested > 0 else 0
+
+        # Deal status (matching Excel: GO/REVIEW/PASS)
+        if user_profit >= 250000 and margin_on_cost >= 0.18 and equity_multiple >= 1.5:
+            deal_status = "GO"
+        elif user_profit < 125000 or margin_on_cost < 0.12 or equity_multiple < 1.25:
+            deal_status = "PASS"
+        else:
+            deal_status = "REVIEW"
+
         exit_costs_market_val = adjusted_revenue * (exit_cost_pct / 100)
-        market_sales_cost = exit_costs_market_val + staging_cost + marketing_cost + warranty_cost + holding_during_sale
-        market_profit = adjusted_revenue - (total_project_cost + loan_fees + total_carry + market_sales_cost)
-        equity_multiple = user_revenue / total_cost if total_cost > 0 else 0
+        market_sales_cost = exit_costs_market_val + staging_cost + marketing_cost + warranty_cost
+        market_profit = adjusted_revenue - (total_project_cost + total_carry + market_sales_cost)
         cumulative_cf = 0
         additional_equity_needed = 0
         total_cash_returned = user_revenue - exit_costs_user
@@ -848,28 +947,23 @@ if show_analysis and result is not None:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Development & Financing**")
-            soft_cost_line = ""
-            if split_soft:
-                soft_cost_line = f"""| — Architecture & Design ({arch_pct}%) | ${hard_cost * arch_pct / 100:,.0f} |
-            | — Engineering ({eng_pct}%) | ${hard_cost * eng_pct / 100:,.0f} |
-            | — Permits & Impact Fees ({permit_fee_pct}%) | ${hard_cost * permit_fee_pct / 100:,.0f} |
-            | — Surveys & Geotech ({survey_pct}%) | ${hard_cost * survey_pct / 100:,.0f} |
-            | — Builder's Risk Insurance ({insurance_dev_pct}%) | ${hard_cost * insurance_dev_pct / 100:,.0f} |
-            | — Other Soft ({other_soft_pct}%) | ${hard_cost * other_soft_pct / 100:,.0f} |
-            | **Soft Costs Total ({soft_cost_pct:.1f}%)** | **${soft_costs:,.0f}** |"""
-            else:
-                soft_cost_line = f"| Soft Costs ({soft_cost_pct}%) | ${soft_costs:,.0f} |"
             st.markdown(f"""
             | Item | Amount |
             |------|--------|
-            | Land / Purchase | ${purchase_price:,.0f} |
+            | Land Acquisition | ${purchase_price:,.0f} |
+            | Demo / Site Prep | ${demo_cost:,.0f} |
             | Hard Cost ({build_sf:,} sf × ${build_cost_psf}/sf) | ${hard_cost:,.0f} |
             | Hard Contingency ({hard_contingency_pct}%) | ${hard_contingency:,.0f} |
-            {soft_cost_line}
+            | — Architecture ({arch_pct}%) | ${hard_cost * arch_pct / 100:,.0f} |
+            | — Structural ({structural_pct}%) | ${hard_cost * structural_pct / 100:,.0f} |
+            | — MEP ({mep_pct}%) | ${hard_cost * mep_pct / 100:,.0f} |
+            | — Fixed items (Survey/Geo/Permits/etc) | ${total_fixed_soft:,.0f} |
+            | **Soft Costs Total** | **${soft_costs:,.0f}** |
             | Soft Contingency | ${soft_contingency:,.0f} |
             | **Non-Land Dev Cost** | **${total_dev_cost:,.0f}** |
-            | Construction Debt ({ltv}% LTC) | ${loan_amount:,.0f} |
-            | Carry Costs ({carry_months} mo) | ${total_carry:,.0f} |
+            | Construction Loan ({ltv}% LTC) | ${construction_loan:,.0f} |
+            | Land Loan ({land_loan_pct}%) | ${land_loan:,.0f} |
+            | Carry Costs ({int(total_carry_months)} mo) | ${total_carry:,.0f} |
             | Points ({loan_fee_pct}%) | ${loan_fees:,.0f} |
             | Sales Costs | ${total_sales_cost:,.0f} |
             | **ALL-IN COST** | **${total_cost:,.0f}** |
@@ -965,8 +1059,8 @@ if show_analysis and result is not None:
             for bc in pf_cost_levels:
                 hc = bc * build_sf
                 hc_cont = hc * (hard_contingency_pct / 100)
-                sc = hc * (soft_cost_pct / 100)
-                dev = hc + hc_cont + sc + soft_contingency
+                sc = hc * (soft_cost_pct / 100) + total_fixed_soft
+                dev = demo_cost + hc + hc_cont + sc + soft_contingency
                 loan = dev * (ltv / 100)
                 # Carry (loan interest uses land+dev as base, matching Karen Ave Excel)
                 ci = (purchase_price + dev) * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * carry_months / 12
@@ -983,10 +1077,9 @@ if show_analysis and result is not None:
                 stg = staging_base + staging_per_unit * units
                 mkt = marketing_base + marketing_per_unit * units
                 war = warranty_per_unit * units
-                hds = tcarry / max(carry_months, 1) * sale_hold_months
-                tsc = ec + stg + mkt + war + hds
+                tsc = ec + stg + mkt + war
                 lf = loan * (loan_fee_pct / 100)
-                total = purchase_price + hc + hc_cont + sc + soft_contingency + tcarry + tsc + lf
+                total = purchase_price + demo_cost + hc + hc_cont + sc + soft_contingency + tcarry + tsc + lf
                 profit = rev - total
 
                 val = {"Land": purchase_price, "Hard Cost": hc, "Hard Contingency": hc_cont,
@@ -1015,8 +1108,7 @@ if show_analysis and result is not None:
             revenue = psf * build_sf
             # Recalculate sales cost for this exit price (variable costs change with revenue)
             var_sc = revenue * (exit_cost_pct / 100)
-            hds_sc = total_carry / max(carry_months, 1) * sale_hold_months
-            sc_sales = var_sc + staging_cost + marketing_cost + warranty_cost + hds_sc
+            sc_sales = var_sc + staging_cost + marketing_cost + warranty_cost
             sc_cost = total_project_cost + loan_fees + total_carry + sc_sales
             profit = revenue - sc_cost + net_rental_income
             margin = (profit / sc_cost) * 100 if sc_cost > 0 else 0
@@ -1062,21 +1154,24 @@ if show_analysis and result is not None:
             st.info(f"📍 Market median is **\\${median_psf}/sf** — your break-even is **\\${breakeven_psf:.0f}/sf**. "
                     f"You need the market to be **\\${breakeven_psf - median_psf:+.0f}/sf above median** to break even.")
 
-        # ── Carrying Cost Breakdown (During Construction) ──
+        # ── Carrying Cost Breakdown ──
         st.markdown("---")
-        st.subheader("🏗️ Carrying Cost Breakdown (Construction Period)")
-        st.caption(f"Build duration: {carry_months} months ({build_months} build + {delay_months} delays)")
+        st.subheader("🏗️ Carrying Cost Breakdown")
+        tcm = int(total_carry_months)
+        st.caption(f"Total carry: {tcm} months ({predev_months} predev + {build_months} build + {delay_months} delay + {sale_hold_months} sale hold)")
         carry_data = [
-            {"Component": "Loan Interest", "Amount": f"${carry_loan_interest:,.0f}",
-             "Assumption": f"(Land+Dev) × {ltv}% LTC × {interest_rate}% × {draw_factor}% draw × {carry_months} mo ÷ 12"},
+            {"Component": "Land Interest / Cost of Capital", "Amount": f"${carry_land_interest:,.0f}",
+             "Assumption": f"Land cost of capital over {tcm} months"},
+            {"Component": "Construction Interest", "Amount": f"${construction_interest:,.0f}",
+             "Assumption": f"Non-land dev × {ltv}% LTC × {interest_rate}% × {draw_factor}% draw × {build_months} mo ÷ 12"},
             {"Component": "Property Taxes", "Amount": f"${carry_taxes:,.0f}",
-             "Assumption": f"(Land + 50% improvements) × {const_tax_rate}% × {carry_months} mo ÷ 12"},
+             "Assumption": f"(Land + 50% (HC+Soft+Demo)) × {const_tax_rate}% × {tcm} mo ÷ 12"},
             {"Component": "Insurance", "Amount": f"${carry_insurance:,.0f}",
-             "Assumption": f"${const_insurance_annual:,}/yr × {carry_months} mo ÷ 12"},
+             "Assumption": f"${const_insurance_annual:,}/yr × {tcm} mo ÷ 12"},
             {"Component": "Utilities", "Amount": f"${carry_utilities:,.0f}",
-             "Assumption": f"${const_utilities:,}/mo × {carry_months} mo"},
+             "Assumption": f"${const_utilities:,}/mo × {tcm} mo"},
             {"Component": "Misc", "Amount": f"${carry_misc:,.0f}",
-             "Assumption": f"${const_misc:,}/mo × {carry_months} mo"},
+             "Assumption": f"${const_misc:,}/mo × {tcm} mo"},
             {"Component": f"Buffer ({carry_buffer_pct}%)", "Amount": f"${carry_buffer:,.0f}",
              "Assumption": f"{carry_buffer_pct}% of carry subtotal"},
             {"Component": "**TOTAL CARRY**", "Amount": f"**${total_carry:,.0f}**", "Assumption": ""},
@@ -1094,25 +1189,27 @@ if show_analysis and result is not None:
             {"Component": f"Staging", "Amount": f"${staging_cost:,.0f}"},
             {"Component": f"Marketing", "Amount": f"${marketing_cost:,.0f}"},
             {"Component": f"Warranty", "Amount": f"${warranty_cost:,.0f}"},
-            {"Component": f"Holding During Sale ({sale_hold_months} mo)", "Amount": f"${holding_during_sale:,.0f}"},
             {"Component": "**TOTAL SALES COST**", "Amount": f"**${total_sales_cost:,.0f}**"},
         ]
         st.dataframe(sales_data, use_container_width=True, hide_index=True)
 
         # ── Soft Cost Breakdown ──
-        if split_soft:
-            st.markdown("---")
-            st.subheader("📐 Soft Cost Breakdown")
-            soft_data = [
-                {"Category": f"Architecture & Design ({arch_pct}%)", "Amount": f"${hard_cost * arch_pct / 100:,.0f}"},
-                {"Category": f"Engineering ({eng_pct}%)", "Amount": f"${hard_cost * eng_pct / 100:,.0f}"},
-                {"Category": f"Permits & Impact Fees ({permit_fee_pct}%)", "Amount": f"${hard_cost * permit_fee_pct / 100:,.0f}"},
-                {"Category": f"Surveys & Geotech ({survey_pct}%)", "Amount": f"${hard_cost * survey_pct / 100:,.0f}"},
-                {"Category": f"Builder's Risk Insurance ({insurance_dev_pct}%)", "Amount": f"${hard_cost * insurance_dev_pct / 100:,.0f}"},
-                {"Category": f"Other Soft ({other_soft_pct}%)", "Amount": f"${hard_cost * other_soft_pct / 100:,.0f}"},
-                {"Category": f"**TOTAL SOFT ({soft_cost_pct:.1f}%)**", "Amount": f"**${soft_costs:,.0f}**"},
-            ]
-            st.dataframe(soft_data, use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.subheader("📐 Soft Cost Breakdown")
+        soft_data = [
+            {"Category": f"Architecture ({arch_pct}%)", "Amount": f"${hard_cost * arch_pct / 100:,.0f}"},
+            {"Category": f"Structural ({structural_pct}%)", "Amount": f"${hard_cost * structural_pct / 100:,.0f}"},
+            {"Category": f"MEP ({mep_pct}%)", "Amount": f"${hard_cost * mep_pct / 100:,.0f}"},
+            {"Category": f"Survey", "Amount": f"${survey_fixed:,.0f}"},
+            {"Category": f"Geotech", "Amount": f"${geotech_fixed:,.0f}"},
+            {"Category": f"Civil", "Amount": f"${civil_fixed:,.0f}"},
+            {"Category": f"Permits", "Amount": f"${permit_fixed:,.0f}"},
+            {"Category": f"Legal/Admin", "Amount": f"${legal_fixed:,.0f}"},
+            {"Category": f"Arborist", "Amount": f"${arborist_fixed:,.0f}"},
+            {"Category": f"Utility App Fees", "Amount": f"${utility_fees_fixed:,.0f}"},
+            {"Category": f"**TOTAL SOFT**", "Amount": f"**${soft_costs:,.0f}**"},
+        ]
+        st.dataframe(soft_data, use_container_width=True, hide_index=True)
 
         # ── Cost vs Price Profit Matrix ──
         st.markdown("---")
@@ -1127,8 +1224,8 @@ if show_analysis and result is not None:
             for ep in matrix_exit_prices:
                 hc = bc * build_sf
                 hc_cont = hc * (hard_contingency_pct / 100)
-                sc = hc * (soft_cost_pct / 100)
-                dev = hc + hc_cont + sc + soft_contingency
+                sc = hc * (soft_cost_pct / 100) + total_fixed_soft
+                dev = demo_cost + hc + hc_cont + sc + soft_contingency
                 proj = purchase_price + dev
                 loan = dev * (ltv / 100)
                 # Carry (loan interest uses land+dev as base, matching Karen Ave Excel)
@@ -1147,8 +1244,7 @@ if show_analysis and result is not None:
                 stg = staging_base + staging_per_unit * units
                 mkt = marketing_base + marketing_per_unit * units
                 war = warranty_per_unit * units
-                hds = tcarry / max(carry_months, 1) * sale_hold_months
-                tsc = ec + stg + mkt + war + hds
+                tsc = ec + stg + mkt + war
                 total = purchase_price + dev + tcarry + tsc + lf
                 profit = rev - total
                 row[f"${ep}/sf"] = f"${profit:,.0f}"
@@ -1168,8 +1264,8 @@ if show_analysis and result is not None:
             for bc in cost_scenarios:
                 hc = bc * build_sf
                 hc_cont = hc * (hard_contingency_pct / 100)
-                sc = hc * (soft_cost_pct / 100)
-                dev = hc + hc_cont + sc + soft_contingency
+                sc = hc * (soft_cost_pct / 100) + total_fixed_soft
+                dev = demo_cost + hc + hc_cont + sc + soft_contingency
                 proj = purchase_price + dev
                 loan = dev * (ltv / 100)
                 # Carry (loan interest uses land+dev as base, matching Karen Ave Excel)
@@ -1187,8 +1283,7 @@ if show_analysis and result is not None:
                 stg = staging_base + staging_per_unit * units
                 mkt = marketing_base + marketing_per_unit * units
                 war = warranty_per_unit * units
-                hds = tcarry / max(dur, 1) * sale_hold_months
-                tsc = ec + stg + mkt + war + hds
+                tsc = ec + stg + mkt + war
                 total = purchase_price + dev + tcarry + tsc + lf
                 profit = rev - total
                 row[f"${bc}/sf"] = f"${profit:,.0f}"
@@ -1857,6 +1952,21 @@ if show_analysis and result is not None:
                 mgmt_cost=mgmt_cost, prop_tax=prop_tax, insurance=insurance,
                 repairs=repairs, misc=misc, leasing=leasing,
                 monthly_noi=monthly_noi, monthly_cf_after_debt=monthly_cf_after_debt,
+                # New params
+                demo_cost=demo_cost, predev_months=predev_months,
+                land_loan_pct=land_loan_pct, land_interest_rate=land_interest_rate,
+                land_equity_cost_rate=land_equity_cost_rate,
+                use_land_cost_of_capital=use_land_cost_of_capital,
+                soft_fixed_costs=total_fixed_soft, carry_land_interest=carry_land_interest,
+                structural_pct=structural_pct, mep_pct=mep_pct,
+                survey_fixed=survey_fixed, geotech_fixed=geotech_fixed,
+                civil_fixed=civil_fixed, permit_fixed=permit_fixed,
+                legal_fixed=legal_fixed, arborist_fixed=arborist_fixed,
+                utility_fees_fixed=utility_fees_fixed,
+                total_carry=total_carry,
+                margin_on_cost=margin_on_cost if hold_months == 0 else 0,
+                deal_status=deal_status if hold_months == 0 else "",
+                construction_loan=construction_loan, land_loan=land_loan,
             )
                 st.download_button(
                     label="📥 Download Excel Model (.xlsx)",
@@ -1892,11 +2002,15 @@ if show_analysis and result is not None:
         # ── Development Costs ──
         st.markdown("#### 🏗️ Development Costs")
         audit_dev = [
+            ("Land Acquisition", "Input", purchase_price),
+            ("Demo / Site Prep", "Input", demo_cost),
             ("Hard Cost", f"{build_sf:,} sf × \\${build_cost_psf}/sf", hard_cost),
             ("Hard Contingency", f"\\${hard_cost:,.0f} × {hard_contingency_pct}%", hard_contingency),
-            ("Soft Costs", f"\\${hard_cost:,.0f} × {soft_cost_pct:.1f}%", soft_costs),
+            ("Soft Costs (% items)", f"HC × ({arch_pct}% + {structural_pct}% + {mep_pct}%)", soft_pct_costs),
+            ("Soft Costs (fixed items)", f"Survey + Geotech + Civil + Permits + Legal + Arborist + Utility", soft_fixed_costs),
+            ("Soft Costs Total", "% items + fixed items", soft_costs),
             ("Soft Contingency", "Fixed amount", soft_contingency),
-            ("**Total Dev Cost**", f"\\${hard_cost:,.0f} + \\${hard_contingency:,.0f} + \\${soft_costs:,.0f} + \\${soft_contingency:,.0f}", total_dev_cost),
+            ("**Non-Land Dev Cost**", f"Demo + HC + HC Cont + Soft + Soft Cont", total_dev_cost),
             ("**Total Project Cost**", f"\\${purchase_price:,.0f} (land) + \\${total_dev_cost:,.0f} (dev)", total_project_cost),
         ]
         audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
@@ -1907,10 +2021,12 @@ if show_analysis and result is not None:
         # ── Financing ──
         st.markdown("#### 💰 Financing")
         audit_fin = [
-            ("Loan Amount (LTC)", f"\\${total_dev_cost:,.0f} × {ltv}%", loan_amount),
-            ("Equity Required", f"\\${total_project_cost:,.0f} − \\${loan_amount:,.0f}", equity),
-            ("Construction Interest", f"\\${loan_amount:,.0f} × {interest_rate}% × {draw_factor}% × {build_months + delay_months}/12 mo", construction_interest),
-            ("Loan Fees (Points)", f"\\${loan_amount:,.0f} × {loan_fee_pct}%", loan_fees),
+            ("Construction Loan (LTC)", f"\\${total_dev_cost:,.0f} × {ltv}%", construction_loan),
+            ("Land Loan", f"\\${purchase_price:,.0f} × {land_loan_pct}%", land_loan),
+            ("Equity Required", f"\\${total_project_cost:,.0f} − \\${construction_loan:,.0f} − \\${land_loan:,.0f}", equity),
+            ("Construction Interest", f"\\${total_dev_cost:,.0f} × {ltv}% × {interest_rate}% × {draw_factor}% × {build_months}/12 mo", construction_interest),
+            ("Land Interest", f"Cost of capital on land over {total_carry_months:.0f} months", carry_land_interest),
+            ("Loan Fees (Points)", f"\\${construction_loan:,.0f} × {loan_fee_pct}%", loan_fees),
         ]
         audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
         for label, formula, value in audit_fin:
@@ -1918,14 +2034,16 @@ if show_analysis and result is not None:
         st.markdown(audit_md)
 
         # ── Carry Costs ──
-        st.markdown("#### 📅 Construction Carry Costs")
+        st.markdown("#### 📅 Carrying Costs")
+        total_carry_mo_int = int(total_carry_months)
         audit_carry = [
-            ("Carry Period", f"{build_months} build + {delay_months} delay", carry_months),
-            ("Carry Loan Interest", f"(\\${purchase_price:,.0f} + \\${total_dev_cost:,.0f}) × {ltv}% × {interest_rate}% × {draw_factor}% × {carry_months}/12", carry_loan_interest),
-            ("Carry Taxes", f"(\\${purchase_price:,.0f} + 50% × \\${total_dev_cost:,.0f}) × {const_tax_rate}% × {carry_months}/12", carry_taxes),
-            ("Carry Insurance", f"\\${const_insurance_annual:,}/yr × {carry_months}/12", carry_insurance),
-            ("Carry Utilities", f"\\${const_utilities:,}/mo × {carry_months} mo", carry_utilities),
-            ("Carry Misc", f"\\${const_misc:,}/mo × {carry_months} mo", carry_misc),
+            ("Total Carry Period", f"{predev_months} predev + {build_months} build + {delay_months} delay + {sale_hold_months} sale hold", total_carry_mo_int),
+            ("Land Interest / Cost of Capital", f"See financing section", carry_land_interest),
+            ("Construction Interest", f"Non-land dev × LTC × Rate × Draw × {build_months}/12", construction_interest),
+            ("Carry Taxes", f"(Land + 50% × (HC + Soft + Demo)) × {const_tax_rate}% × {total_carry_mo_int}/12", carry_taxes),
+            ("Carry Insurance", f"\\${const_insurance_annual:,}/yr × {total_carry_mo_int}/12", carry_insurance),
+            ("Carry Utilities", f"\\${const_utilities:,}/mo × {total_carry_mo_int} mo", carry_utilities),
+            ("Carry Misc", f"\\${const_misc:,}/mo × {total_carry_mo_int} mo", carry_misc),
             ("Carry Subtotal", "Sum of above", carry_subtotal),
             ("Carry Buffer", f"\\${carry_subtotal:,.0f} × {carry_buffer_pct}%", carry_buffer),
             ("**Total Carry**", f"\\${carry_subtotal:,.0f} + \\${carry_buffer:,.0f}", total_carry),
@@ -1946,7 +2064,6 @@ if show_analysis and result is not None:
             ("Staging", f"\\${staging_base:,} base + \\${staging_per_unit:,} × {units} units", staging_cost),
             ("Marketing", f"\\${marketing_base:,} base + \\${marketing_per_unit:,} × {units} units", marketing_cost),
             ("Warranty", f"\\${warranty_per_unit:,} × {units} units", warranty_cost),
-            ("Holding During Sale", f"\\${total_carry:,.0f} / {max(carry_months, 1)} mo × {sale_hold_months} mo", holding_during_sale),
             ("**Total Sales Cost**", "Sum of above", total_sales_cost),
         ]
         audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
@@ -1981,23 +2098,39 @@ if show_analysis and result is not None:
         # ── Final Profit ──
         st.markdown("#### 🎯 Profit Summary")
         audit_profit = [
-            ("Total Equity Invested", "Land + Fees + Carry + Sales + Add'l Equity", total_equity_invested),
+            ("Total Cost", "Project Cost + Carry + Sales", total_cost),
+            ("Total Equity Invested", f"Total Cost − Construction Loan − Land Loan", total_equity_invested),
             ("User Revenue", f"{build_sf:,} sf × \\${exit_psf}/sf", user_revenue),
-            ("**User Profit**", f"Cash returned − Equity invested", user_profit),
+            ("**User Profit**", f"Revenue − Total Cost", user_profit),
+        ]
+        if hold_months == 0:
+            audit_profit += [
+                ("Margin on Cost", f"Profit / Total Cost", margin_on_cost),
+                ("Equity Multiple", f"(Equity + Profit) / Equity", equity_multiple),
+                ("Deal Status", f"GO/REVIEW/PASS thresholds", deal_status),
+            ]
+        else:
+            audit_profit += [
+                ("Equity Multiple", f"Cash returned / Equity invested", equity_multiple),
+            ]
+        audit_profit += [
             ("Market Revenue", f"{build_sf:,} sf × \\${adjusted_exit:.0f}/sf (adj.)", adjusted_revenue),
-            ("**Market Profit**", f"Market cash returned − Equity invested", market_profit),
+            ("**Market Profit**", f"Market revenue − Total Cost", market_profit),
             ("Break-Even $/sf", f"\\${total_equity_invested:,.0f} / {build_sf:,} sf", breakeven_psf),
-            ("Equity Multiple", f"Cash returned / Equity invested", equity_multiple),
             ("Annualized Return", f"Over {timeline_years:.1f} years", annualized_return),
         ]
         audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
         for label, formula, value in audit_profit:
             if label in ("Equity Multiple",):
                 audit_md += f"| {label} | {formula} | {value:.2f}x |\n"
+            elif label in ("Margin on Cost",):
+                audit_md += f"| {label} | {formula} | {value * 100:.1f}% |\n"
             elif label in ("Annualized Return",):
                 audit_md += f"| {label} | {formula} | {value * 100:.1f}% |\n"
             elif label in ("Break-Even $/sf",):
                 audit_md += f"| {label} | {formula} | \\${value:.0f}/sf |\n"
+            elif label in ("Deal Status",):
+                audit_md += f"| {label} | {formula} | **{value}** |\n"
             else:
                 audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
         st.markdown(audit_md)
@@ -2251,25 +2384,20 @@ elif submitted and not show_analysis:
 
     # Cost breakdown
     st.subheader("💰 Cost Breakdown")
-    soft_line_fin = ""
-    if split_soft:
-        soft_line_fin = f"""| — Architecture & Design ({arch_pct}%) | ${hard_cost * arch_pct / 100:,.0f} |
-    | — Engineering ({eng_pct}%) | ${hard_cost * eng_pct / 100:,.0f} |
-    | — Permits & Impact Fees ({permit_fee_pct}%) | ${hard_cost * permit_fee_pct / 100:,.0f} |
-    | — Surveys & Geotech ({survey_pct}%) | ${hard_cost * survey_pct / 100:,.0f} |
-    | — Builder's Risk Insurance ({insurance_dev_pct}%) | ${hard_cost * insurance_dev_pct / 100:,.0f} |
-    | — Other Soft ({other_soft_pct}%) | ${hard_cost * other_soft_pct / 100:,.0f} |
-    | **Soft Costs Total ({soft_cost_pct:.1f}%)** | **${soft_costs:,.0f}** |"""
-    else:
-        soft_line_fin = f"| Soft Costs ({soft_cost_pct}%) | ${soft_costs:,.0f} |"
     st.markdown(f"""
     | Item | Amount |
     |------|--------|
-    | Land / Purchase | ${purchase_price:,.0f} |
+    | Land Acquisition | ${purchase_price:,.0f} |
+    | Demo / Site Prep | ${demo_cost:,.0f} |
     | Hard Cost ({build_sf:,} sf × ${build_cost_psf}/sf) | ${hard_cost:,.0f} |
     | Hard Contingency ({hard_contingency_pct}%) | ${hard_contingency:,.0f} |
-    {soft_line_fin}
+    | — Architecture ({arch_pct}%) | ${hard_cost * arch_pct / 100:,.0f} |
+    | — Structural ({structural_pct}%) | ${hard_cost * structural_pct / 100:,.0f} |
+    | — MEP ({mep_pct}%) | ${hard_cost * mep_pct / 100:,.0f} |
+    | — Fixed items | ${total_fixed_soft:,.0f} |
+    | **Soft Costs Total** | **${soft_costs:,.0f}** |
     | Construction Interest | ${construction_interest:,.0f} |
+    | Land Interest / CoC | ${carry_land_interest:,.0f} |
     | Hold Debt Service ({hold_months} mo) | ${hold_interest:,.0f} |
     | **Sale Costs ({exit_cost_pct:.1f}%)** | **${exit_costs_user:,.0f}** |
     | — Broker/Agent ({broker_fee_pct}%) | ${user_revenue * broker_fee_pct / 100:,.0f} |

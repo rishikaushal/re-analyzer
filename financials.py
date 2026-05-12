@@ -13,30 +13,49 @@ def _compute_hold_profit(purchase_price, build_sf, build_cost, exit_price, exit_
                          rent_per_unit, units, vacancy_pct, mgmt_fee_pct,
                          prop_tax_rate, taxable_value_psf, insurance_monthly,
                          repairs_per_unit, common_utilities, leasing_reserve,
-                         const_tax_rate=2.0, const_insurance_annual=6750,
-                         const_utilities_mo=450, const_misc_mo=325,
-                         carry_buffer_pct=12.5,
+                         const_tax_rate=2.0, const_insurance_annual=6000,
+                         const_utilities_mo=300, const_misc_mo=250,
+                         carry_buffer_pct=10.0,
                          staging_base=1500, staging_per_unit=3500,
                          marketing_base=2000, marketing_per_unit=1500,
-                         warranty_per_unit=1750, sale_hold_months=1.5):
-    """Recompute profit & equity multiple for a given build_cost/exit_price combo."""
+                         warranty_per_unit=1500, sale_hold_months=1.0,
+                         demo_cost=0, predev_months=3,
+                         land_loan_pct=0, land_interest_rate=8.5,
+                         land_equity_cost_rate=7.0, use_land_cost_of_capital=True,
+                         soft_fixed_costs=0):
+    """Recompute profit & equity multiple for a given build_cost/exit_price combo.
+    Matches Nitin Infill Template v1.1 formulas."""
     hc = build_cost * build_sf
     hcont = hc * (hard_contingency_pct / 100)
-    sc = hc * (soft_cost_pct / 100)
-    tdc = hc + hcont + sc + soft_contingency
-    tpc = purchase_price + tdc
+    sc_pct = hc * (soft_cost_pct / 100)
+    sc = sc_pct + soft_fixed_costs
+    non_land_dev = demo_cost + hc + hcont + sc + soft_contingency
+    tpc = purchase_price + non_land_dev
 
-    la = tdc * (ltv / 100)
-    lf = la * (loan_fee_pct / 100)
+    # Timeline
+    total_carry_months = predev_months + build_months + delay_months + sale_hold_months
 
-    # Carry costs (matching main model: loan interest on land+dev)
-    cm = build_months + delay_months
-    ci = (purchase_price + tdc) * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * cm / 12
-    ct = (purchase_price + 0.5 * tdc) * (const_tax_rate / 100) * cm / 12
-    cins = const_insurance_annual * cm / 12
-    cutil = const_utilities_mo * cm
-    cmisc = const_misc_mo * cm
-    csub = ci + ct + cins + cutil + cmisc
+    # Loans
+    construction_loan = non_land_dev * (ltv / 100)
+    land_loan = purchase_price * (land_loan_pct / 100)
+
+    # Land carry
+    if land_loan_pct > 0:
+        land_interest = purchase_price * (land_loan_pct / 100) * (land_interest_rate / 100) * total_carry_months / 12
+    elif use_land_cost_of_capital:
+        land_interest = purchase_price * (land_equity_cost_rate / 100) * total_carry_months / 12
+    else:
+        land_interest = 0
+
+    # Construction interest
+    ci = non_land_dev * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * build_months / 12
+
+    # Other carry
+    ct = (purchase_price + 0.5 * (hc + sc + demo_cost)) * (const_tax_rate / 100) * total_carry_months / 12
+    cins = const_insurance_annual * total_carry_months / 12
+    cutil = const_utilities_mo * total_carry_months
+    cmisc = const_misc_mo * total_carry_months
+    csub = land_interest + ci + ct + cins + cutil + cmisc
     cbuf = csub * (carry_buffer_pct / 100)
     tcarry = csub + cbuf
 
@@ -46,22 +65,21 @@ def _compute_hold_profit(purchase_price, build_sf, build_cost, exit_price, exit_
     stg = staging_base + staging_per_unit * units
     mkt = marketing_base + marketing_per_unit * units
     war = warranty_per_unit * units
-    hds = tcarry / max(cm, 1) * sale_hold_months
-    tsales = var_sales + stg + mkt + war + hds
+    tsales = var_sales + stg + mkt + war
 
     if hold_months > 0:
         mpr = perm_mortgage_rate / 100 / 12
         npay = amortization_years * 12
         if mpr > 0:
-            mds = la * (mpr * (1 + mpr) ** npay) / ((1 + mpr) ** npay - 1)
+            mds = construction_loan * (mpr * (1 + mpr) ** npay) / ((1 + mpr) ** npay - 1)
         else:
-            mds = la / npay
+            mds = construction_loan / npay
         hi = mds * hold_months
 
         if mpr > 0:
-            lbal = la * (1 + mpr) ** hold_months - mds * ((1 + mpr) ** hold_months - 1) / mpr
+            lbal = construction_loan * (1 + mpr) ** hold_months - mds * ((1 + mpr) ** hold_months - 1) / mpr
         else:
-            lbal = la - mds * hold_months
+            lbal = construction_loan - mds * hold_months
 
         gr = rent_per_unit * units * hold_months
         er = gr * (1 - vacancy_pct / 100)
@@ -75,20 +93,20 @@ def _compute_hold_profit(purchase_price, build_sf, build_cost, exit_price, exit_
         mcf = mnoi - mds
         cum_cf = mcf * hold_months
         aeq = max(0, -cum_cf)
-        tei = purchase_price + tcarry + lf + aeq
+        tei = purchase_price + tcarry + stg + mkt + war + aeq
 
         ec = rev * (exit_cost_pct / 100)
-        nsbd = rev - ec
+        nsbd = rev - ec - stg - mkt - war
         nsad = nsbd - lbal
         pcf = max(0, cum_cf)
         tcr = nsad + pcf
         profit = tcr - tei
         em = tcr / tei if tei > 0 else 0
     else:
-        tc = tpc + lf + tcarry + tsales
-        tei = tc
+        tc = tpc + tcarry + tsales
+        tei = max(0, tc - land_loan - construction_loan)
         profit = rev - tc
-        em = rev / tc if tc > 0 else 0
+        em = (tei + profit) / tei if tei > 0 else 0
 
     return profit, em
 
@@ -126,6 +144,16 @@ def generate_excel_bytes(
     # OPEX
     mgmt_cost, prop_tax, insurance, repairs, misc, leasing,
     monthly_noi, monthly_cf_after_debt,
+    # New params (with defaults for backward compat)
+    demo_cost=0, predev_months=3,
+    land_loan_pct=0, land_interest_rate=8.5,
+    land_equity_cost_rate=7.0, use_land_cost_of_capital=True,
+    soft_fixed_costs=0, carry_land_interest=0,
+    structural_pct=0.0, mep_pct=0.0,
+    survey_fixed=0, geotech_fixed=0, civil_fixed=0,
+    permit_fixed=0, legal_fixed=0, arborist_fixed=0, utility_fees_fixed=0,
+    total_carry=0, margin_on_cost=0, deal_status="",
+    construction_loan=0, land_loan=0,
 ):
     """Build a multi-sheet Excel workbook and return bytes."""
     wb = Workbook()
@@ -237,13 +265,17 @@ def generate_excel_bytes(
     r += 1
 
     dev_items = [
+        ("Land Acquisition", "", purchase_price, ""),
+        ("Demo / Site Prep", "", demo_cost, "Set to 0 for no teardown"),
         ("Hard Cost", f"{build_cost_psf} × {build_sf:,} sf", hard_cost, ""),
         ("Hard Cost Contingency", f"{hard_contingency_pct}% of Hard Cost", hard_contingency, ""),
-        ("Soft Cost", f"{soft_cost_pct:.1f}% of Hard Cost", soft_costs, ""),
+        ("Soft Costs", f"% items + fixed items", soft_costs, ""),
         ("Soft Contingency", "Fixed", soft_contingency, ""),
         ("Non-Land Development Cost", "Sum above", total_dev_cost, ""),
-        ("Construction Debt", f"{ltv}% LTC", loan_amount, ""),
-        ("Construction Interest During Build", f"{interest_rate}% × {draw_factor}% draw × {build_months + delay_months} mo", construction_interest, ""),
+        ("Construction Debt", f"{ltv}% LTC", construction_loan, ""),
+        ("Land Loan", f"{land_loan_pct}%", land_loan, ""),
+        ("Construction Interest", f"{interest_rate}% × {draw_factor}% draw × {build_months} mo", construction_interest, ""),
+        ("Land Interest / Cost of Capital", "", carry_land_interest, ""),
         ("Construction Loan Fees", f"{loan_fee_pct}% of loan", loan_fees, ""),
     ]
     for label, basis, amt, note in dev_items:
@@ -358,6 +390,11 @@ def generate_excel_bytes(
         staging_base=staging_base, staging_per_unit=staging_per_unit,
         marketing_base=marketing_base, marketing_per_unit=marketing_per_unit,
         warranty_per_unit=warranty_per_unit, sale_hold_months=sale_hold_months,
+        demo_cost=demo_cost, predev_months=predev_months,
+        land_loan_pct=land_loan_pct, land_interest_rate=land_interest_rate,
+        land_equity_cost_rate=land_equity_cost_rate,
+        use_land_cost_of_capital=use_land_cost_of_capital,
+        soft_fixed_costs=soft_fixed_costs,
     )
 
     # Header row
@@ -445,42 +482,60 @@ def generate_excel_bytes(
     def _proforma_row_at_cost(bc):
         hc_l = bc * build_sf
         hcont_l = hc_l * (hard_contingency_pct / 100)
-        sc_l = hc_l * (soft_cost_pct / 100)
-        tdc_l = hc_l + hcont_l + sc_l + soft_contingency
-        tpc_l = purchase_price + tdc_l
-        la_l = tdc_l * (ltv / 100)
-        lf_l = la_l * (loan_fee_pct / 100)
-        # Carry (matching main model: loan interest on land+dev)
-        cm = build_months + delay_months
-        ci_l = (purchase_price + tdc_l) * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * cm / 12
-        ct_l = (purchase_price + 0.5 * tdc_l) * (const_tax_rate / 100) * cm / 12
-        cins_l = const_insurance_annual * cm / 12
-        cutil_l = const_utilities * cm
-        cmisc_l = const_misc * cm
-        csub_l = ci_l + ct_l + cins_l + cutil_l + cmisc_l
+        sc_pct_l = hc_l * (soft_cost_pct / 100)
+        sc_l = sc_pct_l + soft_fixed_costs
+        non_land_l = demo_cost + hc_l + hcont_l + sc_l + soft_contingency
+        tpc_l = purchase_price + non_land_l
+        # Carry (matching Excel model)
+        tcm = predev_months + build_months + delay_months + sale_hold_months
+        if land_loan_pct > 0:
+            li_l = purchase_price * (land_loan_pct / 100) * (land_interest_rate / 100) * tcm / 12
+        elif use_land_cost_of_capital:
+            li_l = purchase_price * (land_equity_cost_rate / 100) * tcm / 12
+        else:
+            li_l = 0
+        ci_l = non_land_l * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * build_months / 12
+        ct_l = (purchase_price + 0.5 * (hc_l + sc_l + demo_cost)) * (const_tax_rate / 100) * tcm / 12
+        cins_l = const_insurance_annual * tcm / 12
+        cutil_l = const_utilities * tcm
+        cmisc_l = const_misc * tcm
+        csub_l = li_l + ci_l + ct_l + cins_l + cutil_l + cmisc_l
         cbuf_l = csub_l * (carry_buffer_pct / 100)
         tcarry_l = csub_l + cbuf_l
-        # Sales (matching main model)
+        # Sales
         rev_l = exit_psf * build_sf
         var_sales_l = rev_l * (exit_cost_pct / 100)
         stg_l = staging_base + staging_per_unit * units
         mkt_l = marketing_base + marketing_per_unit * units
         war_l = warranty_per_unit * units
-        hds_l = tcarry_l / max(cm, 1) * sale_hold_months
-        tsc_l = var_sales_l + stg_l + mkt_l + war_l + hds_l
-        total_l = tpc_l + lf_l + tcarry_l + tsc_l
-        profit_l = rev_l - total_l + (net_rental_income if hold_months > 0 else 0)
+        tsc_l = var_sales_l + stg_l + mkt_l + war_l
+        total_l = tpc_l + tcarry_l + tsc_l
+        # Equity & profit
+        cl_l = non_land_l * (ltv / 100)
+        ll_l = purchase_price * (land_loan_pct / 100)
+        equity_l = max(0, total_l - cl_l - ll_l)
+        profit_l = rev_l - total_l
+        margin_l = profit_l / total_l if total_l > 0 else 0
+        em_l = (equity_l + profit_l) / equity_l if equity_l > 0 else 0
+        status_l = "GO" if (profit_l >= 250000 and margin_l >= 0.18 and em_l >= 1.5) else \
+                   ("PASS" if (profit_l < 125000 or margin_l < 0.12 or em_l < 1.25) else "REVIEW")
         return {
-            "Land": purchase_price,
-            "Hard Cost": hc_l,
-            f"Hard Cost Contingency ({hard_contingency_pct}%)": hcont_l,
-            "Soft + Arch": sc_l + soft_contingency,
+            "Land Acquisition": purchase_price,
+            "Demo / Site Prep": demo_cost,
+            "Vertical Hard Cost": hc_l,
+            "Hard Cost Contingency": hcont_l,
+            "Soft Costs": sc_l,
             "Soft Contingency": soft_contingency,
-            "Carry": tcarry_l,
-            "Sales Cost": tsc_l,
-            "Total Cost": total_l,
-            "Exit Value": rev_l,
+            "Carry Costs": tcarry_l,
+            "Sales Costs": tsc_l,
+            "Total Project Cost": total_l,
+            "Exit Revenue": rev_l,
             "Profit": profit_l,
+            "Margin on Cost": margin_l,
+            "Equity Invested ($)": equity_l,
+            "Equity Multiple": em_l,
+            "Profit on Equity": profit_l / equity_l if equity_l > 0 else 0,
+            "Deal Status": status_l,
         }
 
     proforma_rows = list(_proforma_row_at_cost(cost_levels[0]).keys())
@@ -488,8 +543,17 @@ def generate_excel_bytes(
 
     for i, row_label in enumerate(proforma_rows):
         vals = [row_label] + [proforma_data[j][row_label] for j in range(4)]
-        fill_r = orange_fill if row_label == "Profit" else (light_blue_fill if row_label == "Total Cost" else None)
-        fmts_r = [None] + [dollar_fmt] * 4
+        fill_r = orange_fill if row_label in ("Profit", "Deal Status") else \
+                 (light_blue_fill if row_label == "Total Project Cost" else None)
+        # Choose format based on row type
+        if row_label in ("Margin on Cost", "Profit on Equity"):
+            fmts_r = [None] + [pct_fmt] * 4
+        elif row_label == "Equity Multiple":
+            fmts_r = [None] + [mult_fmt] * 4
+        elif row_label == "Deal Status":
+            fmts_r = [None] * 5
+        else:
+            fmts_r = [None] + [dollar_fmt] * 4
 
         # Add model assumptions on the right
         k_val = ""
@@ -533,25 +597,49 @@ def generate_excel_bytes(
     r += 1
     ws2.cell(row=r, column=1, value="SOFT COST BREAKDOWN").font = Font(bold=True, size=14)
     r += 1
-    _header_row(ws2, r, ["Category", "Rate"] + [f"${cl}/sf" for cl in cost_levels])
+    _header_row(ws2, r, ["Category", "Rate / Amount"] + [f"${cl}/sf" for cl in cost_levels])
     r += 1
 
-    soft_categories = [
-        ("Architecture & Design", arch_pct),
-        ("Engineering (struct/MEP)", eng_pct),
-        ("Permits & Impact Fees", permit_fee_pct),
-        ("Surveys & Geotech", survey_pct),
-        ("Builder's Risk Insurance", insurance_dev_pct),
-        ("Other Soft Costs", other_soft_pct),
-        ("Total Soft %", soft_cost_pct),
+    # % items (vary with build cost)
+    pct_soft_items = [
+        ("Architecture", arch_pct),
+        ("Structural", structural_pct),
+        ("MEP Engineering", mep_pct),
     ]
-    for label, pct_val in soft_categories:
+    for label, pct_val in pct_soft_items:
         hc_vals = [pct_val / 100] + [(cl * build_sf) * pct_val / 100 for cl in cost_levels]
-        fill_r = light_blue_fill if "Total" in label else None
         _data_row(ws2, r, [label] + hc_vals,
-                  fills=[fill_r, fill_r] + [fill_r] * 4,
                   fmts=[None, pct_fmt] + [dollar_fmt] * 4)
         r += 1
+
+    # Fixed $ items (same across all build costs)
+    fixed_soft_items = [
+        ("Survey", survey_fixed),
+        ("Geotech", geotech_fixed),
+        ("Civil", civil_fixed),
+        ("Permits / Fees", permit_fixed),
+        ("Legal / Admin", legal_fixed),
+        ("Arborist", arborist_fixed),
+        ("Utility Application Fees", utility_fees_fixed),
+    ]
+    for label, amt in fixed_soft_items:
+        _data_row(ws2, r, [label, amt] + [amt] * 4,
+                  fmts=[None, dollar_fmt] + [dollar_fmt] * 4)
+        r += 1
+
+    # Totals
+    for cl_idx, cl in enumerate(cost_levels):
+        pass
+    total_soft_by_cost = []
+    for cl in cost_levels:
+        hc_cl = cl * build_sf
+        pct_total = sum(hc_cl * p / 100 for _, p in pct_soft_items)
+        fixed_total = sum(a for _, a in fixed_soft_items)
+        total_soft_by_cost.append(pct_total + fixed_total)
+    _data_row(ws2, r, ["Total Soft Costs", ""] + total_soft_by_cost,
+              fills=[light_blue_fill, light_blue_fill] + [light_blue_fill] * 4,
+              fmts=[None, None] + [dollar_fmt] * 4)
+    r += 1
 
     # ── Section 4: Carrying Cost Breakdown ──
     r += 1
@@ -560,14 +648,24 @@ def generate_excel_bytes(
     _header_row(ws2, r, ["Category", "Amount", "Notes"])
     r += 1
 
+    tcm_x = predev_months + build_months + delay_months + sale_hold_months
+    carry_taxes_x = (purchase_price + 0.5 * (hard_cost + soft_costs + demo_cost)) * (const_tax_rate / 100) * tcm_x / 12
+    carry_insurance_x = const_insurance_annual * tcm_x / 12
+    carry_utilities_x = const_utilities * tcm_x
+    carry_misc_x = const_misc * tcm_x
+    carry_sub_x = carry_land_interest + construction_interest + carry_taxes_x + carry_insurance_x + carry_utilities_x + carry_misc_x
+    carry_buffer_x = carry_sub_x * (carry_buffer_pct / 100)
+
     carry_items = [
-        ("Loan Interest (Construction)", construction_interest, f"{interest_rate}% × {draw_factor}% draw"),
-        ("Loan Fees", loan_fees, f"{loan_fee_pct}% of loan"),
-        ("Hold Interest (Perm Debt Service)", hold_interest, f"{hold_months} months"),
-        ("Property Taxes (Hold)", prop_tax, f"{prop_tax_rate}%"),
-        ("Insurance (Hold)", insurance, f"{hold_months} months"),
-        ("Utilities / Misc (Hold)", misc, ""),
-        ("Total Carry", construction_interest + loan_fees + hold_interest + prop_tax + insurance + misc, ""),
+        ("Land Interest / Cost of Capital", carry_land_interest, ""),
+        ("Construction Interest", construction_interest, f"{interest_rate}% × {draw_factor}% draw × {build_months} mo"),
+        ("Construction Loan Fees", loan_fees, f"{loan_fee_pct}% of loan"),
+        ("Taxes (Construction)", carry_taxes_x, f"{const_tax_rate}% × {tcm_x} mo"),
+        ("Insurance (Construction)", carry_insurance_x, f"${const_insurance_annual:,}/yr × {tcm_x} mo"),
+        ("Utilities (Construction)", carry_utilities_x, f"${const_utilities:,}/mo × {tcm_x} mo"),
+        ("Misc Carry (Construction)", carry_misc_x, f"${const_misc:,}/mo × {tcm_x} mo"),
+        ("Carry Buffer", carry_buffer_x, f"{carry_buffer_pct}%"),
+        ("Total Carry", total_carry, ""),
     ]
     for label, amt, note in carry_items:
         fill_r = light_blue_fill if "Total" in label else None
@@ -618,22 +716,9 @@ def generate_excel_bytes(
     for dur in durations:
         ws2.cell(row=r, column=1, value=f"{dur} months").font = bold
         for j, bc in enumerate(cost_levels, 2):
-            profit_val, _ = _compute_hold_profit(
-                build_cost=bc, exit_price=exit_psf,
-                purchase_price=purchase_price, build_sf=build_sf,
-                exit_cost_pct=exit_cost_pct,
-                hard_contingency_pct=hard_contingency_pct,
-                soft_cost_pct=soft_cost_pct, soft_contingency=soft_contingency,
-                ltv=ltv, interest_rate=interest_rate, draw_factor=draw_factor,
-                loan_fee_pct=loan_fee_pct,
-                build_months=dur, hold_months=hold_months, delay_months=delay_months,
-                perm_mortgage_rate=perm_mortgage_rate, amortization_years=amortization_years,
-                rent_per_unit=rent_per_unit, units=units, vacancy_pct=vacancy_pct,
-                mgmt_fee_pct=mgmt_fee_pct, prop_tax_rate=prop_tax_rate,
-                taxable_value_psf=taxable_value_psf, insurance_monthly=insurance_monthly,
-                repairs_per_unit=repairs_per_unit, common_utilities=common_utilities,
-                leasing_reserve=leasing_reserve,
-            )
+            dur_args = dict(common_args)
+            dur_args['build_months'] = dur
+            profit_val, _ = _compute_hold_profit(build_cost=bc, exit_price=exit_psf, **dur_args)
             cell = ws2.cell(row=r, column=j, value=profit_val)
             cell.number_format = dollar_fmt
             cell.fill = green_fill if profit_val >= 0 else PatternFill("solid", fgColor="FFC7CE")
