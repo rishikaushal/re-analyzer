@@ -162,18 +162,32 @@ with st.sidebar:
         if uploaded_cfg is not None and not st.session_state.get('_cfg_loaded'):
             try:
                 cfg_data = json.loads(uploaded_cfg.read())
+                count = 0
+                # Support both nested (sectioned) and flat (legacy) formats
                 for k, v in cfg_data.items():
-                    if k in ("address", "zip_code"):
-                        st.session_state[k] = v
-                    elif k in PARAM_DEFAULTS:
-                        st.session_state[f"cfg_{k}"] = v
+                    if isinstance(v, dict):
+                        # Nested section — flatten its keys
+                        for sk, sv in v.items():
+                            if sk in ("address", "zip_code"):
+                                st.session_state[sk] = sv
+                            elif sk in PARAM_DEFAULTS:
+                                st.session_state[f"cfg_{sk}"] = sv
+                            count += 1
+                    else:
+                        # Flat legacy key
+                        if k in ("address", "zip_code"):
+                            st.session_state[k] = v
+                        elif k in PARAM_DEFAULTS:
+                            st.session_state[f"cfg_{k}"] = v
+                        count += 1
                 st.session_state['_cfg_loaded'] = True
-                st.success(f"✅ Loaded {len(cfg_data)} parameters")
+                st.success(f"✅ Loaded {count} parameters")
                 st.rerun()
             except (json.JSONDecodeError, Exception) as e:
                 st.error(f"❌ Invalid config file: {e}")
         elif uploaded_cfg is None:
             st.session_state['_cfg_loaded'] = False
+        export_placeholder = st.empty()
 
     with st.form("deal_form"):
         st.subheader("🏠 Property")
@@ -304,38 +318,57 @@ with st.sidebar:
             leasing_reserve = st.number_input("Leasing / Turnover Reserve ($/mo)", min_value=0, value=_cfg('leasing_reserve'), step=25,
                                               help="Reserve for tenant turnover, marketing, and lease-up costs")
 
-    # ── Export Config (after form, still in sidebar) ──
+    # ── Export Config (rendered into the top-of-sidebar placeholder) ──
     current_config = {
-        "address": address, "zip_code": zip_code,
-        "purchase_price": purchase_price, "build_sf": build_sf, "units": units,
-        "build_cost_psf": build_cost_psf, "exit_psf": exit_psf,
-        "hard_contingency_pct": hard_contingency_pct, "split_soft": split_soft,
-        "arch_pct": arch_pct, "eng_pct": eng_pct, "permit_fee_pct": permit_fee_pct,
-        "survey_pct": survey_pct, "insurance_dev_pct": insurance_dev_pct,
-        "other_soft_pct": other_soft_pct, "soft_cost_pct": soft_cost_pct,
-        "soft_contingency": soft_contingency,
-        "ltv": ltv, "interest_rate": interest_rate, "draw_factor": draw_factor,
-        "loan_fee_pct": loan_fee_pct,
-        "build_months": build_months, "hold_months": hold_months, "delay_months": delay_months,
-        "const_tax_rate": const_tax_rate, "const_insurance_annual": const_insurance_annual,
-        "const_utilities": const_utilities, "const_misc": const_misc,
-        "carry_buffer_pct": carry_buffer_pct,
-        "broker_fee_pct": broker_fee_pct, "title_closing_pct": title_closing_pct,
-        "seller_concessions_pct": seller_concessions_pct,
-        "sale_hold_months": sale_hold_months, "staging_base": staging_base,
-        "staging_per_unit": staging_per_unit, "marketing_base": marketing_base,
-        "marketing_per_unit": marketing_per_unit, "warranty_per_unit": warranty_per_unit,
-        "price_decline": price_decline,
-        "rent_per_unit": rent_per_unit, "vacancy_pct": vacancy_pct,
-        "mgmt_fee_pct": mgmt_fee_pct, "perm_mortgage_rate": perm_mortgage_rate,
-        "amortization_years": amortization_years, "taxable_value_psf": taxable_value_psf,
-        "prop_tax_rate": prop_tax_rate, "insurance_monthly": insurance_monthly,
-        "repairs_per_unit": repairs_per_unit, "common_utilities": common_utilities,
-        "leasing_reserve": leasing_reserve,
+        "property": {
+            "address": address,
+            "zip_code": zip_code,
+        },
+        "deal_numbers": {
+            "purchase_price": purchase_price, "build_sf": build_sf, "units": units,
+            "build_cost_psf": build_cost_psf, "exit_psf": exit_psf,
+        },
+        "cost_details": {
+            "hard_contingency_pct": hard_contingency_pct, "split_soft": split_soft,
+            "arch_pct": arch_pct, "eng_pct": eng_pct, "permit_fee_pct": permit_fee_pct,
+            "survey_pct": survey_pct, "insurance_dev_pct": insurance_dev_pct,
+            "other_soft_pct": other_soft_pct, "soft_cost_pct": soft_cost_pct,
+            "soft_contingency": soft_contingency,
+        },
+        "construction_financing": {
+            "ltv": ltv, "interest_rate": interest_rate, "draw_factor": draw_factor,
+            "loan_fee_pct": loan_fee_pct,
+        },
+        "timeline": {
+            "build_months": build_months, "hold_months": hold_months, "delay_months": delay_months,
+        },
+        "construction_carry": {
+            "const_tax_rate": const_tax_rate, "const_insurance_annual": const_insurance_annual,
+            "const_utilities": const_utilities, "const_misc": const_misc,
+            "carry_buffer_pct": carry_buffer_pct,
+        },
+        "sale_exit_costs": {
+            "broker_fee_pct": broker_fee_pct, "title_closing_pct": title_closing_pct,
+            "seller_concessions_pct": seller_concessions_pct,
+            "sale_hold_months": sale_hold_months, "staging_base": staging_base,
+            "staging_per_unit": staging_per_unit, "marketing_base": marketing_base,
+            "marketing_per_unit": marketing_per_unit, "warranty_per_unit": warranty_per_unit,
+        },
+        "market_risk": {
+            "price_decline": price_decline,
+        },
+        "rental_hold": {
+            "rent_per_unit": rent_per_unit, "vacancy_pct": vacancy_pct,
+            "mgmt_fee_pct": mgmt_fee_pct, "perm_mortgage_rate": perm_mortgage_rate,
+            "amortization_years": amortization_years, "taxable_value_psf": taxable_value_psf,
+            "prop_tax_rate": prop_tax_rate, "insurance_monthly": insurance_monthly,
+            "repairs_per_unit": repairs_per_unit, "common_utilities": common_utilities,
+            "leasing_reserve": leasing_reserve,
+        },
     }
     config_json = json.dumps(current_config, indent=2)
     config_filename = f"deal_config_{address.replace(' ', '_')}_{zip_code}.json"
-    st.download_button(
+    export_placeholder.download_button(
         "⬇️ Export Config",
         data=config_json,
         file_name=config_filename,
