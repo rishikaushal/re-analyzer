@@ -166,7 +166,12 @@ def _cfg(key):
     """Get parameter value: session_state (from upload) > stored address/zip > default."""
     if key in ("address", "zip_code"):
         return st.session_state.get(key, PARAM_DEFAULTS[key])
-    return st.session_state.get(f"cfg_{key}", PARAM_DEFAULTS[key])
+    val = st.session_state.get(f"cfg_{key}", PARAM_DEFAULTS[key])
+    # Ensure numeric types match PARAM_DEFAULTS to avoid Streamlit mixed-type errors
+    default = PARAM_DEFAULTS.get(key)
+    if isinstance(default, float) and isinstance(val, int):
+        val = float(val)
+    return val
 
 
 # ── Sidebar: Input Form ──
