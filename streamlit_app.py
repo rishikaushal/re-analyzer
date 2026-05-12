@@ -1172,62 +1172,64 @@ if show_analysis and result is not None:
             st.info(f"📍 Market median is **\\${median_psf}/sf** — your break-even is **\\${breakeven_psf:.0f}/sf**. "
                     f"You need the market to be **\\${breakeven_psf - median_psf:+.0f}/sf above median** to break even.")
 
-        # ── Carrying Cost Breakdown ──
-        st.markdown("---")
-        st.subheader("🏗️ Carrying Cost Breakdown")
-        tcm = int(total_carry_months)
-        st.caption(f"Total carry: {tcm} months ({predev_months} predev + {build_months} build + {delay_months} delay + {sale_hold_months} sale hold)")
-        carry_data = [
-            {"Component": "Land Interest / Cost of Capital", "Amount": f"${carry_land_interest:,.0f}",
-             "Assumption": f"Land cost of capital over {tcm} months"},
-            {"Component": "Construction Interest", "Amount": f"${construction_interest:,.0f}",
-             "Assumption": f"Non-land dev × {ltv}% LTC × {interest_rate}% × {draw_factor}% draw × {build_months} mo ÷ 12"},
-            {"Component": "Property Taxes", "Amount": f"${carry_taxes:,.0f}",
-             "Assumption": f"(Land + 50% (HC+Soft+Demo)) × {const_tax_rate}% × {tcm} mo ÷ 12"},
-            {"Component": "Insurance", "Amount": f"${carry_insurance:,.0f}",
-             "Assumption": f"${const_insurance_annual:,}/yr × {tcm} mo ÷ 12"},
-            {"Component": "Utilities", "Amount": f"${carry_utilities:,.0f}",
-             "Assumption": f"${const_utilities:,}/mo × {tcm} mo"},
-            {"Component": "Misc", "Amount": f"${carry_misc:,.0f}",
-             "Assumption": f"${const_misc:,}/mo × {tcm} mo"},
-            {"Component": f"Buffer ({carry_buffer_pct}%)", "Amount": f"${carry_buffer:,.0f}",
-             "Assumption": f"{carry_buffer_pct}% of carry subtotal"},
-            {"Component": "**TOTAL CARRY**", "Amount": f"**${total_carry:,.0f}**", "Assumption": ""},
-        ]
-        st.dataframe(carry_data, use_container_width=True, hide_index=True)
+        # ── Detailed Breakdowns (controlled by split_soft toggle) ──
+        if split_soft:
+            # ── Carrying Cost Breakdown ──
+            st.markdown("---")
+            st.subheader("🏗️ Carrying Cost Breakdown")
+            tcm = int(total_carry_months)
+            st.caption(f"Total carry: {tcm} months ({predev_months} predev + {build_months} build + {delay_months} delay + {sale_hold_months} sale hold)")
+            carry_data = [
+                {"Component": "Land Interest / Cost of Capital", "Amount": f"${carry_land_interest:,.0f}",
+                 "Assumption": f"Land cost of capital over {tcm} months"},
+                {"Component": "Construction Interest", "Amount": f"${construction_interest:,.0f}",
+                 "Assumption": f"Non-land dev × {ltv}% LTC × {interest_rate}% × {draw_factor}% draw × {build_months} mo ÷ 12"},
+                {"Component": "Property Taxes", "Amount": f"${carry_taxes:,.0f}",
+                 "Assumption": f"(Land + 50% (HC+Soft+Demo)) × {const_tax_rate}% × {tcm} mo ÷ 12"},
+                {"Component": "Insurance", "Amount": f"${carry_insurance:,.0f}",
+                 "Assumption": f"${const_insurance_annual:,}/yr × {tcm} mo ÷ 12"},
+                {"Component": "Utilities", "Amount": f"${carry_utilities:,.0f}",
+                 "Assumption": f"${const_utilities:,}/mo × {tcm} mo"},
+                {"Component": "Misc", "Amount": f"${carry_misc:,.0f}",
+                 "Assumption": f"${const_misc:,}/mo × {tcm} mo"},
+                {"Component": f"Buffer ({carry_buffer_pct}%)", "Amount": f"${carry_buffer:,.0f}",
+                 "Assumption": f"{carry_buffer_pct}% of carry subtotal"},
+                {"Component": "**TOTAL CARRY**", "Amount": f"**${total_carry:,.0f}**", "Assumption": ""},
+            ]
+            st.dataframe(carry_data, use_container_width=True, hide_index=True)
 
-        # ── Sales Cost Breakdown ──
-        st.markdown("---")
-        st.subheader("💸 Sales Cost Breakdown")
-        st.caption(f"Based on exit value of \\${user_revenue_est:,.0f} ({exit_psf}/sf × {build_sf:,} sf)")
-        sales_data = [
-            {"Component": f"Realtor ({broker_fee_pct}%)", "Amount": f"${user_revenue_est * broker_fee_pct / 100:,.0f}"},
-            {"Component": f"Title + Closing ({title_closing_pct}%)", "Amount": f"${user_revenue_est * title_closing_pct / 100:,.0f}"},
-            {"Component": f"Concessions ({seller_concessions_pct}%)", "Amount": f"${user_revenue_est * seller_concessions_pct / 100:,.0f}"},
-            {"Component": f"Staging", "Amount": f"${staging_cost:,.0f}"},
-            {"Component": f"Marketing", "Amount": f"${marketing_cost:,.0f}"},
-            {"Component": f"Warranty", "Amount": f"${warranty_cost:,.0f}"},
-            {"Component": "**TOTAL SALES COST**", "Amount": f"**${total_sales_cost:,.0f}**"},
-        ]
-        st.dataframe(sales_data, use_container_width=True, hide_index=True)
+            # ── Sales Cost Breakdown ──
+            st.markdown("---")
+            st.subheader("💸 Sales Cost Breakdown")
+            st.caption(f"Based on exit value of \\${user_revenue_est:,.0f} ({exit_psf}/sf × {build_sf:,} sf)")
+            sales_data = [
+                {"Component": f"Realtor ({broker_fee_pct}%)", "Amount": f"${user_revenue_est * broker_fee_pct / 100:,.0f}"},
+                {"Component": f"Title + Closing ({title_closing_pct}%)", "Amount": f"${user_revenue_est * title_closing_pct / 100:,.0f}"},
+                {"Component": f"Concessions ({seller_concessions_pct}%)", "Amount": f"${user_revenue_est * seller_concessions_pct / 100:,.0f}"},
+                {"Component": f"Staging", "Amount": f"${staging_cost:,.0f}"},
+                {"Component": f"Marketing", "Amount": f"${marketing_cost:,.0f}"},
+                {"Component": f"Warranty", "Amount": f"${warranty_cost:,.0f}"},
+                {"Component": "**TOTAL SALES COST**", "Amount": f"**${total_sales_cost:,.0f}**"},
+            ]
+            st.dataframe(sales_data, use_container_width=True, hide_index=True)
 
-        # ── Soft Cost Breakdown ──
-        st.markdown("---")
-        st.subheader("📐 Soft Cost Breakdown")
-        soft_data = [
-            {"Category": f"Architecture ({arch_pct}%)", "Amount": f"${hard_cost * arch_pct / 100:,.0f}"},
-            {"Category": f"Structural ({structural_pct}%)", "Amount": f"${hard_cost * structural_pct / 100:,.0f}"},
-            {"Category": f"MEP ({mep_pct}%)", "Amount": f"${hard_cost * mep_pct / 100:,.0f}"},
-            {"Category": f"Survey", "Amount": f"${survey_fixed:,.0f}"},
-            {"Category": f"Geotech", "Amount": f"${geotech_fixed:,.0f}"},
-            {"Category": f"Civil", "Amount": f"${civil_fixed:,.0f}"},
-            {"Category": f"Permits", "Amount": f"${permit_fixed:,.0f}"},
-            {"Category": f"Legal/Admin", "Amount": f"${legal_fixed:,.0f}"},
-            {"Category": f"Arborist", "Amount": f"${arborist_fixed:,.0f}"},
-            {"Category": f"Utility App Fees", "Amount": f"${utility_fees_fixed:,.0f}"},
-            {"Category": f"**TOTAL SOFT**", "Amount": f"**${soft_costs:,.0f}**"},
-        ]
-        st.dataframe(soft_data, use_container_width=True, hide_index=True)
+            # ── Soft Cost Breakdown ──
+            st.markdown("---")
+            st.subheader("📐 Soft Cost Breakdown")
+            soft_data = [
+                {"Category": f"Architecture ({arch_pct}%)", "Amount": f"${hard_cost * arch_pct / 100:,.0f}"},
+                {"Category": f"Structural ({structural_pct}%)", "Amount": f"${hard_cost * structural_pct / 100:,.0f}"},
+                {"Category": f"MEP ({mep_pct}%)", "Amount": f"${hard_cost * mep_pct / 100:,.0f}"},
+                {"Category": f"Survey", "Amount": f"${survey_fixed:,.0f}"},
+                {"Category": f"Geotech", "Amount": f"${geotech_fixed:,.0f}"},
+                {"Category": f"Civil", "Amount": f"${civil_fixed:,.0f}"},
+                {"Category": f"Permits", "Amount": f"${permit_fixed:,.0f}"},
+                {"Category": f"Legal/Admin", "Amount": f"${legal_fixed:,.0f}"},
+                {"Category": f"Arborist", "Amount": f"${arborist_fixed:,.0f}"},
+                {"Category": f"Utility App Fees", "Amount": f"${utility_fees_fixed:,.0f}"},
+                {"Category": f"**TOTAL SOFT**", "Amount": f"**${soft_costs:,.0f}**"},
+            ]
+            st.dataframe(soft_data, use_container_width=True, hide_index=True)
 
         # ── Cost vs Price Profit Matrix ──
         st.markdown("---")
