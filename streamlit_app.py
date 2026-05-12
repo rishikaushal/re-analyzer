@@ -244,39 +244,52 @@ with st.sidebar:
         with st.expander("💵 Cost Details", expanded=expand_all):
             hard_contingency_pct = st.number_input("Hard Cost Contingency (%)", min_value=0.0, max_value=15.0, value=_cfg('hard_contingency_pct'), step=0.5,
                                              help="Buffer for unexpected construction cost overruns (typically 5-10%)")
-            st.markdown("**Soft Costs — % of Hard Cost**")
-            arch_pct = st.number_input("Architecture (%)", min_value=0.0, max_value=10.0, value=_cfg('arch_pct'), step=0.5,
-                                       help="Architect fees — as % of hard cost")
-            structural_pct = st.number_input("Structural (%)", min_value=0.0, max_value=10.0, value=_cfg('structural_pct'), step=0.1,
-                                             help="Structural engineering — as % of hard cost")
-            mep_pct = st.number_input("MEP Engineering (%)", min_value=0.0, max_value=10.0, value=_cfg('mep_pct'), step=0.1,
-                                      help="Mechanical, electrical, plumbing engineering — as % of hard cost")
-            st.markdown("**Soft Costs — Fixed ($)**")
-            survey_fixed = st.number_input("Survey ($)", min_value=0, value=_cfg('survey_fixed'), step=500,
-                                           help="Land survey cost")
-            geotech_fixed = st.number_input("Geotech ($)", min_value=0, value=_cfg('geotech_fixed'), step=500,
-                                            help="Soil testing / geotechnical report")
-            civil_fixed = st.number_input("Civil ($)", min_value=0, value=_cfg('civil_fixed'), step=500,
-                                          help="Civil engineering")
-            permit_fixed = st.number_input("Permit Allowance ($)", min_value=0, value=_cfg('permit_fixed'), step=1000,
-                                           help="City permits, impact fees, utility connections")
-            legal_fixed = st.number_input("Legal / Admin ($)", min_value=0, value=_cfg('legal_fixed'), step=500,
-                                          help="Legal, accounting, administrative costs")
-            arborist_fixed = st.number_input("Arborist ($)", min_value=0, value=_cfg('arborist_fixed'), step=500,
-                                             help="Tree survey / arborist report")
-            utility_fees_fixed = st.number_input("Utility App Fees ($)", min_value=0, value=_cfg('utility_fees_fixed'), step=500,
-                                                 help="Water, sewer, electric utility application fees")
-            soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=_cfg('soft_contingency'), step=5000,
-                                               help="Fixed buffer for unexpected soft cost items")
-            # Compute combined soft cost values
-            split_soft = True
-            eng_pct = structural_pct + mep_pct
+            split_soft = st.toggle("Split Soft Cost Categories", value=_cfg('split_soft'),
+                                   help="Toggle to show individual soft cost line items instead of a single %")
+            if split_soft:
+                st.markdown("**Soft Costs — % of Hard Cost**")
+                arch_pct = st.number_input("Architecture (%)", min_value=0.0, max_value=10.0, value=_cfg('arch_pct'), step=0.5,
+                                            help="Architect fees — as % of hard cost")
+                structural_pct = st.number_input("Structural (%)", min_value=0.0, max_value=10.0, value=_cfg('structural_pct'), step=0.1,
+                                                  help="Structural engineering — as % of hard cost")
+                mep_pct = st.number_input("MEP Engineering (%)", min_value=0.0, max_value=10.0, value=_cfg('mep_pct'), step=0.1,
+                                           help="Mechanical, electrical, plumbing engineering — as % of hard cost")
+                st.markdown("**Soft Costs — Fixed ($)**")
+                survey_fixed = st.number_input("Survey ($)", min_value=0, value=_cfg('survey_fixed'), step=500,
+                                                help="Land survey cost")
+                geotech_fixed = st.number_input("Geotech ($)", min_value=0, value=_cfg('geotech_fixed'), step=500,
+                                                 help="Soil testing / geotechnical report")
+                civil_fixed = st.number_input("Civil ($)", min_value=0, value=_cfg('civil_fixed'), step=500,
+                                               help="Civil engineering")
+                permit_fixed = st.number_input("Permit Allowance ($)", min_value=0, value=_cfg('permit_fixed'), step=1000,
+                                                help="City permits, impact fees, utility connections")
+                legal_fixed = st.number_input("Legal / Admin ($)", min_value=0, value=_cfg('legal_fixed'), step=500,
+                                               help="Legal, accounting, administrative costs")
+                arborist_fixed = st.number_input("Arborist ($)", min_value=0, value=_cfg('arborist_fixed'), step=500,
+                                                  help="Tree survey / arborist report")
+                utility_fees_fixed = st.number_input("Utility App Fees ($)", min_value=0, value=_cfg('utility_fees_fixed'), step=500,
+                                                      help="Water, sewer, electric utility application fees")
+                soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=_cfg('soft_contingency'), step=5000,
+                                                    help="Fixed buffer for unexpected soft cost items")
+                eng_pct = structural_pct + mep_pct
+                soft_cost_pct = arch_pct + structural_pct + mep_pct
+                total_fixed_soft = survey_fixed + geotech_fixed + civil_fixed + permit_fixed + legal_fixed + arborist_fixed + utility_fees_fixed
+            else:
+                soft_cost_pct = st.number_input("Soft Cost (% of HC)", min_value=0.0, max_value=30.0, value=_cfg('soft_cost_pct'), step=0.5,
+                                                help="All-in soft cost as a single percentage of hard cost")
+                soft_contingency = st.number_input("Soft Contingency ($)", min_value=0, value=_cfg('soft_contingency'), step=5000,
+                                                    help="Fixed buffer for unexpected soft cost items")
+                arch_pct = soft_cost_pct / 3
+                structural_pct = soft_cost_pct / 3
+                mep_pct = soft_cost_pct / 3
+                eng_pct = structural_pct + mep_pct
+                survey_fixed = geotech_fixed = civil_fixed = permit_fixed = 0
+                legal_fixed = arborist_fixed = utility_fees_fixed = 0
+                total_fixed_soft = 0
             permit_fee_pct = 0.0
             survey_pct = 0.0
             insurance_dev_pct = 0.0
             other_soft_pct = 0.0
-            soft_cost_pct = arch_pct + structural_pct + mep_pct
-            total_fixed_soft = survey_fixed + geotech_fixed + civil_fixed + permit_fixed + legal_fixed + arborist_fixed + utility_fees_fixed
 
         with st.expander("💰 Construction Financing", expanded=expand_all):
             ltv = st.number_input("Construction LTC (%)", min_value=0.0, max_value=100.0, value=_cfg('ltv'), step=1.0,
