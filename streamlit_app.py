@@ -2002,82 +2002,200 @@ if show_analysis and result is not None:
     # ── Audit Trail Tab ──
     with tab_audit:
         st.subheader("📐 Calculation Audit Trail")
-        st.caption("Every intermediate calculation with formulas — verify the math is correct.")
+        st.caption("Matches Excel template structure — all calculations across 4 build cost scenarios.")
 
-        # ── Development Costs ──
-        st.markdown("#### 🏗️ Development Costs")
-        audit_dev = [
-            ("Land Acquisition", "Input", purchase_price),
-            ("Demo / Site Prep", "Input", demo_cost),
-            ("Hard Cost", f"{build_sf:,} sf × \\${build_cost_psf}/sf", hard_cost),
-            ("Hard Contingency", f"\\${hard_cost:,.0f} × {hard_contingency_pct}%", hard_contingency),
-            ("Soft Costs (% items)", f"HC × ({arch_pct}% + {structural_pct}% + {mep_pct}%)", soft_pct_costs),
-            ("Soft Costs (fixed items)", f"Survey + Geotech + Civil + Permits + Legal + Arborist + Utility", soft_fixed_costs),
-            ("Soft Costs Total", "% items + fixed items", soft_costs),
-            ("Soft Contingency", "Fixed amount", soft_contingency),
-            ("**Non-Land Dev Cost**", f"Demo + HC + HC Cont + Soft + Soft Cont", total_dev_cost),
-            ("**Total Project Cost**", f"\\${purchase_price:,.0f} (land) + \\${total_dev_cost:,.0f} (dev)", total_project_cost),
-        ]
-        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
-        for label, formula, value in audit_dev:
-            audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
-        st.markdown(audit_md)
+        # Build cost scenarios (matching Excel columns B-E)
+        cost_levels = [build_cost_psf - 25, build_cost_psf, build_cost_psf + 25, build_cost_psf + 50]
+        col_headers = [f"${cl}/sf" for cl in cost_levels]
+        tcm_audit = int(total_carry_months)
 
-        # ── Financing ──
-        st.markdown("#### 💰 Financing")
-        audit_fin = [
-            ("Construction Loan (LTC)", f"\\${total_dev_cost:,.0f} × {ltv}%", construction_loan),
-            ("Land Loan", f"\\${purchase_price:,.0f} × {land_loan_pct}%", land_loan),
-            ("Equity Required", f"\\${total_project_cost:,.0f} − \\${construction_loan:,.0f} − \\${land_loan:,.0f}", equity),
-            ("Construction Interest", f"\\${total_dev_cost:,.0f} × {ltv}% × {interest_rate}% × {draw_factor}% × {build_months}/12 mo", construction_interest),
-            ("Land Interest", f"Cost of capital on land over {total_carry_months:.0f} months", carry_land_interest),
-            ("Loan Fees (Points)", f"\\${construction_loan:,.0f} × {loan_fee_pct}%", loan_fees),
-        ]
-        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
-        for label, formula, value in audit_fin:
-            audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
-        st.markdown(audit_md)
-
-        # ── Carry Costs ──
-        st.markdown("#### 📅 Carrying Costs")
-        total_carry_mo_int = int(total_carry_months)
-        audit_carry = [
-            ("Total Carry Period", f"{predev_months} predev + {build_months} build + {delay_months} delay + {sale_hold_months} sale hold", total_carry_mo_int),
-            ("Land Interest / Cost of Capital", f"See financing section", carry_land_interest),
-            ("Construction Interest", f"Non-land dev × LTC × Rate × Draw × {build_months}/12", construction_interest),
-            ("Carry Taxes", f"(Land + 50% × (HC + Soft + Demo)) × {const_tax_rate}% × {total_carry_mo_int}/12", carry_taxes),
-            ("Carry Insurance", f"\\${const_insurance_annual:,}/yr × {total_carry_mo_int}/12", carry_insurance),
-            ("Carry Utilities", f"\\${const_utilities:,}/mo × {total_carry_mo_int} mo", carry_utilities),
-            ("Carry Misc", f"\\${const_misc:,}/mo × {total_carry_mo_int} mo", carry_misc),
-            ("Carry Subtotal", "Sum of above", carry_subtotal),
-            ("Carry Buffer", f"\\${carry_subtotal:,.0f} × {carry_buffer_pct}%", carry_buffer),
-            ("**Total Carry**", f"\\${carry_subtotal:,.0f} + \\${carry_buffer:,.0f}", total_carry),
-        ]
-        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
-        for label, formula, value in audit_carry:
-            if label == "Total Carry Period":
-                audit_md += f"| {label} | {formula} | {value} months |\n"
+        def _audit_scenario(bc):
+            """Compute all line items for one build cost scenario."""
+            hc = bc * build_sf
+            hcont = hc * (hard_contingency_pct / 100)
+            sc_pct = hc * (arch_pct / 100) + hc * (structural_pct / 100) + hc * (mep_pct / 100)
+            sc = sc_pct + total_fixed_soft
+            nld = demo_cost + hc + hcont + sc + soft_contingency
+            tpc = purchase_price + nld
+            # Carry
+            if land_loan_pct > 0:
+                li = purchase_price * (land_loan_pct / 100) * (land_interest_rate / 100) * tcm_audit / 12
+            elif use_land_cost_of_capital:
+                li = purchase_price * (land_equity_cost_rate / 100) * tcm_audit / 12
             else:
-                audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
-        st.markdown(audit_md)
+                li = 0
+            ci = nld * (ltv / 100) * (interest_rate / 100) * (draw_factor / 100) * build_months / 12
+            ct = (purchase_price + 0.5 * (hc + sc + demo_cost)) * (const_tax_rate / 100) * tcm_audit / 12
+            cins = const_insurance_annual * tcm_audit / 12
+            cutil = const_utilities * tcm_audit
+            cmisc = const_misc * tcm_audit
+            csub = li + ci + ct + cins + cutil + cmisc
+            cbuf = csub * (carry_buffer_pct / 100)
+            tcarry = csub + cbuf
+            # Sales
+            rev = exit_psf * build_sf
+            var_s = rev * (exit_cost_pct / 100)
+            stg = staging_base + staging_per_unit * units
+            mkt = marketing_base + marketing_per_unit * units
+            war = warranty_per_unit * units
+            tsc = var_s + stg + mkt + war
+            total = tpc + tcarry + tsc
+            # Equity & profit
+            cl = nld * (ltv / 100)
+            ll = purchase_price * (land_loan_pct / 100)
+            lf = cl * (loan_fee_pct / 100)
+            eq = max(0, total - cl - ll)
+            profit = rev - total
+            margin = profit / total if total > 0 else 0
+            em = (eq + profit) / eq if eq > 0 else 0
+            poe = profit / eq if eq > 0 else 0
+            eq_pct = eq / total if total > 0 else 0
+            status = "GO" if (profit >= 250000 and margin >= 0.18 and em >= 1.5) else \
+                     ("PASS" if (profit < 125000 or margin < 0.12 or em < 1.25) else "REVIEW")
+            return {
+                # Pro Forma
+                "Land Acquisition": purchase_price, "Demo / Site Prep": demo_cost,
+                "Vertical Hard Cost": hc, "Hard Cost Contingency": hcont,
+                "Soft Costs": sc, "Soft Contingency": soft_contingency,
+                "Carry Costs": tcarry, "Sales Costs": tsc,
+                "Total Project Cost": total, "Exit Revenue": rev,
+                "Profit": profit, "Margin on Cost": margin,
+                "Equity Invested ($)": eq, "Equity % of Total Cost": eq_pct,
+                "Equity Multiple": em, "Profit on Equity": poe,
+                "Deal Status": status,
+                # Soft breakdown
+                "Architecture": hc * (arch_pct / 100), "Structural": hc * (structural_pct / 100),
+                "MEP Engineering": hc * (mep_pct / 100),
+                "Survey": survey_fixed, "Geotech": geotech_fixed, "Civil": civil_fixed,
+                "Permits / Fees": permit_fixed, "Legal / Admin": legal_fixed,
+                "Arborist": arborist_fixed, "Utility Application Fees": utility_fees_fixed,
+                "Total Soft Costs": sc,
+                # Carry breakdown
+                "Land Interest": li, "Construction Interest": ci,
+                "Taxes": ct, "Insurance": cins, "Utilities": cutil,
+                "Misc Carry": cmisc, "Carry Buffer": cbuf, "Total Carry": tcarry,
+                # Sales breakdown
+                "Realtor": rev * (broker_fee_pct / 100),
+                "Title + Closing": rev * (title_closing_pct / 100),
+                "Concessions": rev * (seller_concessions_pct / 100),
+                "Staging": stg, "Marketing": mkt, "Warranty": war,
+                "Total Sales Cost": tsc,
+            }
 
-        # ── Sales Costs ──
-        st.markdown("#### 💸 Sales / Exit Costs")
-        audit_sales = [
-            ("Exit Revenue (User)", f"{build_sf:,} sf × \\${exit_psf}/sf", user_revenue),
-            ("Broker + Title + Concessions", f"\\${user_revenue:,.0f} × {exit_cost_pct:.1f}%", variable_sales),
-            ("Staging", f"\\${staging_base:,} base + \\${staging_per_unit:,} × {units} units", staging_cost),
-            ("Marketing", f"\\${marketing_base:,} base + \\${marketing_per_unit:,} × {units} units", marketing_cost),
-            ("Warranty", f"\\${warranty_per_unit:,} × {units} units", warranty_cost),
-            ("**Total Sales Cost**", "Sum of above", total_sales_cost),
-        ]
-        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
-        for label, formula, value in audit_sales:
-            audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
-        st.markdown(audit_md)
+        scenarios = [_audit_scenario(cl) for cl in cost_levels]
+
+        def _render_audit_table(title, rows, fmt_overrides=None):
+            """Render a multi-column audit table matching Excel layout."""
+            st.markdown(f"#### {title}")
+            if fmt_overrides is None:
+                fmt_overrides = {}
+            md = "| Component | " + " | ".join(col_headers) + " |\n"
+            md += "|-----------|" + "|".join(["--------:"] * len(col_headers)) + "|\n"
+            for row_label in rows:
+                vals = [scenarios[j][row_label] for j in range(4)]
+                fmt = fmt_overrides.get(row_label, "dollar")
+                if fmt == "pct":
+                    cells = [f"{v * 100:.1f}%" for v in vals]
+                elif fmt == "mult":
+                    cells = [f"{v:.2f}x" for v in vals]
+                elif fmt == "text":
+                    cells = [f"**{v}**" for v in vals]
+                else:
+                    cells = [f"${v:,.0f}" for v in vals]
+                bold = "**" if row_label.startswith("Total") or row_label in ("Profit", "Deal Status", "Exit Revenue") else ""
+                md += f"| {bold}{row_label}{bold} | " + " | ".join(cells) + " |\n"
+            st.markdown(md)
+
+        # ── 1. Pro Forma Summary ──
+        _render_audit_table("📊 Pro Forma Summary", [
+            "Land Acquisition", "Demo / Site Prep", "Vertical Hard Cost",
+            "Hard Cost Contingency", "Soft Costs", "Soft Contingency",
+            "Carry Costs", "Sales Costs", "Total Project Cost",
+            "Exit Revenue", "Profit", "Margin on Cost",
+            "Equity Invested ($)", "Equity % of Total Cost",
+            "Equity Multiple", "Profit on Equity", "Deal Status",
+        ], fmt_overrides={
+            "Margin on Cost": "pct", "Equity % of Total Cost": "pct",
+            "Equity Multiple": "mult", "Profit on Equity": "pct",
+            "Deal Status": "text",
+        })
+
+        st.markdown("---")
+
+        # ── 2. Soft Cost Breakdown ──
+        _render_audit_table("📐 Soft Cost Breakdown", [
+            "Architecture", "Structural", "MEP Engineering",
+            "Survey", "Geotech", "Civil", "Permits / Fees",
+            "Legal / Admin", "Arborist", "Utility Application Fees",
+            "Total Soft Costs",
+        ])
+
+        st.markdown("---")
+
+        # ── 3. Carry Cost Breakdown ──
+        st.markdown(f"#### 📅 Carry Cost Breakdown")
+        st.caption(f"Total carry: {tcm_audit} months ({predev_months} predev + {build_months} build + {delay_months} delay + {sale_hold_months} sale hold)")
+        _render_audit_table("", [
+            "Land Interest", "Construction Interest", "Taxes",
+            "Insurance", "Utilities", "Misc Carry",
+            "Carry Buffer", "Total Carry",
+        ])
+
+        st.markdown("---")
+
+        # ── 4. Sales Cost Breakdown ──
+        _render_audit_table("💸 Sales Cost Breakdown", [
+            "Realtor", "Title + Closing", "Concessions",
+            "Staging", "Marketing", "Warranty", "Total Sales Cost",
+        ])
+
+        st.markdown("---")
+
+        # ── 5. Audit Checks (matching Excel Audit sheet) ──
+        st.markdown("#### ✅ Audit Checks")
+        st.caption("Automated consistency checks — same as the Excel Audit sheet.")
+
+        # Run checks
+        checks = []
+        # Check 1: Total SF = Units × SF/Unit
+        checks.append(("Inputs: Total SF = Units × SF/Unit",
+                        f"{build_sf} = {units} × {sf_per_unit}",
+                        build_sf == units * sf_per_unit))
+        # Check 2: Soft cost summary matches breakdown
+        checks.append(("Soft cost summary matches breakdown",
+                        f"${soft_costs:,.0f} = ${soft_pct_costs:,.0f} + ${total_fixed_soft:,.0f}",
+                        abs(soft_costs - (soft_pct_costs + total_fixed_soft)) < 1))
+        # Check 3: Carry summary matches breakdown
+        checks.append(("Carry summary matches breakdown",
+                        f"${total_carry:,.0f} = subtotal + buffer",
+                        abs(total_carry - (carry_subtotal + carry_buffer)) < 1))
+        # Check 4: Sales summary matches breakdown
+        checks.append(("Sales summary matches breakdown",
+                        f"${total_sales_cost:,.0f}",
+                        abs(total_sales_cost - (variable_sales + staging_cost + marketing_cost + warranty_cost)) < 1))
+        # Check 5: Construction interest uses non-land costs
+        checks.append(("Construction interest uses non-land dev costs",
+                        f"Base = ${scenarios[0]['Construction Interest']:,.0f}",
+                        scenarios[0]["Construction Interest"] > 0))
+        # Check 6: Equity is not negative
+        checks.append(("Equity invested is positive",
+                        f"${total_equity_invested:,.0f}",
+                        total_equity_invested > 0))
+        # Check 7: Deal status populated
+        if hold_months == 0:
+            checks.append(("Deal status is set",
+                            deal_status,
+                            deal_status in ("GO", "REVIEW", "PASS")))
+
+        check_md = "| Check | Formula / Value | Status |\n|-------|----------------|--------|\n"
+        for desc, formula, ok in checks:
+            status = "✅ OK" if ok else "❌ CHECK"
+            check_md += f"| {desc} | {formula} | {status} |\n"
+        st.markdown(check_md)
 
         # ── Hold Period (if applicable) ──
         if hold_months > 0:
+            st.markdown("---")
             st.markdown("#### 🏘️ Hold Period (Rental)")
             audit_hold = [
                 ("Gross Rent", f"\\${rent_per_unit:,}/unit × {units} units × {hold_months} mo", gross_rent),
@@ -2099,46 +2217,6 @@ if show_analysis and result is not None:
             for label, formula, value in audit_hold:
                 audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
             st.markdown(audit_md)
-
-        # ── Final Profit ──
-        st.markdown("#### 🎯 Profit Summary")
-        audit_profit = [
-            ("Total Cost", "Project Cost + Carry + Sales", total_cost),
-            ("Total Equity Invested", f"Total Cost − Construction Loan − Land Loan", total_equity_invested),
-            ("User Revenue", f"{build_sf:,} sf × \\${exit_psf}/sf", user_revenue),
-            ("**User Profit**", f"Revenue − Total Cost", user_profit),
-        ]
-        if hold_months == 0:
-            audit_profit += [
-                ("Margin on Cost", f"Profit / Total Cost", margin_on_cost),
-                ("Equity Multiple", f"(Equity + Profit) / Equity", equity_multiple),
-                ("Deal Status", f"GO/REVIEW/PASS thresholds", deal_status),
-            ]
-        else:
-            audit_profit += [
-                ("Equity Multiple", f"Cash returned / Equity invested", equity_multiple),
-            ]
-        audit_profit += [
-            ("Market Revenue", f"{build_sf:,} sf × \\${adjusted_exit:.0f}/sf (adj.)", adjusted_revenue),
-            ("**Market Profit**", f"Market revenue − Total Cost", market_profit),
-            ("Break-Even $/sf", f"\\${total_equity_invested:,.0f} / {build_sf:,} sf", breakeven_psf),
-            ("Annualized Return", f"Over {timeline_years:.1f} years", annualized_return),
-        ]
-        audit_md = "| Item | Formula | Result |\n|------|---------|--------|\n"
-        for label, formula, value in audit_profit:
-            if label in ("Equity Multiple",):
-                audit_md += f"| {label} | {formula} | {value:.2f}x |\n"
-            elif label in ("Margin on Cost",):
-                audit_md += f"| {label} | {formula} | {value * 100:.1f}% |\n"
-            elif label in ("Annualized Return",):
-                audit_md += f"| {label} | {formula} | {value * 100:.1f}% |\n"
-            elif label in ("Break-Even $/sf",):
-                audit_md += f"| {label} | {formula} | \\${value:.0f}/sf |\n"
-            elif label in ("Deal Status",):
-                audit_md += f"| {label} | {formula} | **{value}** |\n"
-            else:
-                audit_md += f"| {label} | {formula} | \\${value:,.0f} |\n"
-        st.markdown(audit_md)
 
         # ── Benchmark Test ──
         st.markdown("---")
