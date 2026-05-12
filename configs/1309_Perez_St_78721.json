@@ -1,0 +1,81 @@
+{
+  "property": {
+    "address": "1309 Perez St",
+    "zip_code": "78721"
+  },
+  "deal_numbers": {
+    "purchase_price": 500000,
+    "demo_cost": 20000,
+    "units": 4,
+    "sf_per_unit": 1750,
+    "build_cost_psf": 225,
+    "exit_psf": 475
+  },
+  "cost_details": {
+    "hard_contingency_pct": 5.0,
+    "arch_pct": 3.0,
+    "structural_pct": 1.2,
+    "mep_pct": 1.2,
+    "survey_fixed": 1000,
+    "geotech_fixed": 1500,
+    "civil_fixed": 0,
+    "permit_fixed": 18000,
+    "legal_fixed": 5000,
+    "arborist_fixed": 0,
+    "utility_fees_fixed": 5000,
+    "soft_contingency": 0
+  },
+  "construction_financing": {
+    "ltv": 75.0,
+    "interest_rate": 10.0,
+    "draw_factor": 55.0,
+    "loan_fee_pct": 1.5,
+    "land_loan_pct": 0.0,
+    "land_interest_rate": 8.5,
+    "land_equity_cost_rate": 7.0,
+    "use_land_cost_of_capital": true
+  },
+  "timeline": {
+    "predev_months": 3,
+    "build_months": 12,
+    "hold_months": 0,
+    "delay_months": 0
+  },
+  "construction_carry": {
+    "const_tax_rate": 2.2,
+    "const_insurance_annual": 3000,
+    "const_utilities": 200,
+    "const_misc": 150,
+    "carry_buffer_pct": 5.0
+  },
+  "sale_exit_costs": {
+    "broker_fee_pct": 4.0,
+    "title_closing_pct": 1.5,
+    "seller_concessions_pct": 2.5,
+    "sale_hold_months": 3,
+    "staging_base": 0,
+    "staging_per_unit": 0,
+    "marketing_base": 0,
+    "marketing_per_unit": 0,
+    "warranty_per_unit": 0
+  },
+  "market_risk": {
+    "price_decline": 5.0
+  },
+  "rental_hold": {
+    "rent_per_unit": 2000,
+    "vacancy_pct": 5.0,
+    "repairs_reserve_pct": 5.0,
+    "mgmt_fee_pct": 8.0,
+    "other_opex_annual": 0,
+    "exit_cap_rate": 6.0,
+    "perm_mortgage_rate": 7.5,
+    "amortization_years": 30,
+    "taxable_value_psf": 300,
+    "prop_tax_rate": 2.2,
+    "insurance_monthly": 250,
+    "repairs_per_unit": 100,
+    "common_utilities": 150,
+    "leasing_reserve": 100
+  }
+}
