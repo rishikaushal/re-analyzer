@@ -15,6 +15,7 @@ from fetchers import AustinPermits, RedfinComps, fetch_census_home_value, fetch_
 from analysis import run_analysis, extract_street_name
 from financials import _compute_hold_profit, generate_excel_bytes
 from ai_summary import generate_ai_summary, GEMINI_AVAILABLE
+from firebase_cache import cache_get, cache_set, cache_clear_address, _make_doc_id
 from report import generate_report_bytes
 
 # ── Page Config ──
@@ -213,6 +214,16 @@ with st.sidebar:
         elif uploaded_cfg is None:
             st.session_state['_cfg_loaded'] = False
         export_placeholder = st.empty()
+
+    # ── Cache Management ──
+    with st.expander("🗄️ Data Cache", expanded=False):
+        st.caption("Market data is cached in Firebase to speed up repeat searches.")
+        if st.button("🗑️ Clear Cache for Current Address", use_container_width=True):
+            _addr = st.session_state.get('address', _cfg('address'))
+            _zip = st.session_state.get('zip_code', _cfg('zip_code'))
+            cache_clear_address(_addr, _zip)
+            st.cache_data.clear()
+            st.success(f"Cache cleared for {_addr}, {_zip}")
 
     with st.form("deal_form"):
         st.subheader("🏠 Property")
@@ -478,6 +489,11 @@ elif st.session_state.get('analysis_done') and not submitted:
     street_name = extract_street_name(address)
 
 if show_analysis and result is not None:
+
+    # Show cache hit status if any
+    _ch = result.sources_status.get('cache_hits', [])
+    if _ch:
+        st.caption(f"⚡ Cached: {', '.join(_ch)} ({len(_ch)} signal{'s' if len(_ch) != 1 else ''} from Firebase)")
 
     # ══════════════════════════════════════════════
     # STEP 2: Financial calculations (matching Nitin Infill Template v1.1)
@@ -1482,7 +1498,12 @@ if show_analysis and result is not None:
         st.markdown("---")
 
         # ── Census Bureau Rental Data ──
-        census_rents = fetch_census_rents(zip_code)
+        _cr_id = _make_doc_id(zip_code)
+        census_rents = cache_get("census_rents", _cr_id)
+        if census_rents is None:
+            census_rents = fetch_census_rents(zip_code)
+            if census_rents:
+                cache_set("census_rents", _cr_id, census_rents, hint=zip_code)
         if census_rents and census_rents.get('median_rent'):
             st.markdown(f"### 📊 Actual Median Rents — ZIP {zip_code}")
             st.caption(f"Source: {census_rents.get('source', 'Census ACS')}")
@@ -1717,10 +1738,22 @@ if show_analysis and result is not None:
 
         # Geocode and fetch plot data
         with st.spinner("Fetching zoning, parcel & flood data..."):
-            lat, lon = geocode_address(address, zip_code)
+            _geo_id = _make_doc_id(address, zip_code)
+            _geo_cached = cache_get("geocode", _geo_id)
+            if _geo_cached and len(_geo_cached) == 2 and _geo_cached[0] is not None:
+                lat, lon = _geo_cached[0], _geo_cached[1]
+            else:
+                lat, lon = geocode_address(address, zip_code)
+                if lat and lon:
+                    cache_set("geocode", _geo_id, [lat, lon], hint=address)
 
         if lat and lon:
-            plot_data = fetch_plot_info(lat, lon, address)
+            _pi_id = _make_doc_id(round(lat, 4), round(lon, 4))
+            plot_data = cache_get("plot_info", _pi_id)
+            if plot_data is None:
+                plot_data = fetch_plot_info(lat, lon, address)
+                if plot_data:
+                    cache_set("plot_info", _pi_id, plot_data, hint=address)
             st.caption(f"📍 Coordinates: {lat:.6f}, {lon:.6f}")
 
             pc1, pc2 = st.columns(2)
@@ -1838,8 +1871,13 @@ if show_analysis and result is not None:
                             for c in sorted(result.redfin_comps, key=lambda x: x.get('distance_mi', 0))[:5]:
                                 top_comps_text += f"  - {c['address']}: ${c['price']:,} ({c['sqft']:,}sf, ${c['psf']}/sf, sold {c.get('sold_date', 'N/A')}, {c.get('distance_mi', 0):.1f}mi away)\n"
 
-                        # Fetch Census rents for AI
-                        _census_ai = fetch_census_rents(zip_code)
+                        # Fetch Census rents for AI (use cache)
+                        _cr_ai_id = _make_doc_id(zip_code)
+                        _census_ai = cache_get("census_rents", _cr_ai_id)
+                        if _census_ai is None:
+                            _census_ai = fetch_census_rents(zip_code)
+                            if _census_ai:
+                                cache_set("census_rents", _cr_ai_id, _census_ai, hint=zip_code)
                         _census_median = f"${_census_ai.get('median_rent', 0):,}" if _census_ai and _census_ai.get('median_rent') else 'N/A'
                         _census_by_br = ', '.join([
                             f"{br}: ${_census_ai.get(k, 0):,}/mo"
