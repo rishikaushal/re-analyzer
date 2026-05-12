@@ -1,8 +1,4 @@
 {
-  "property": {
-    "address": "1309 Perez Street Austin TX 78721",
-    "zip_code": "78721"
-  },
   "deal_numbers": {
     "purchase_price": 500000,
     "demo_cost": 20000,
